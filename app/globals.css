@@ -218,6 +218,55 @@ select:focus, input:focus, textarea:focus { border-color: #5b9c87; box-shadow: 0
 .error-toast span { font-size: 0.82rem; }
 .error-toast button { border: 0; color: inherit; background: transparent; font-size: 1.4rem; }
 
+.settings-button {
+  min-height: 38px;
+  border: 1px solid color-mix(in srgb, var(--forest) 32%, transparent);
+  border-radius: 999px;
+  padding: 0 14px;
+  color: var(--forest);
+  background: rgba(255, 255, 255, 0.72);
+  font-weight: 800;
+}
+.settings-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(5, 28, 23, 0.62);
+  backdrop-filter: blur(8px);
+}
+.settings-dialog {
+  width: min(540px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 22px;
+  padding: 25px;
+  color: var(--ink);
+  background: var(--paper);
+  box-shadow: 0 28px 90px rgba(4, 28, 22, 0.34);
+  text-align: left;
+}
+.settings-title-row { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; }
+.settings-title-row h2 { margin: 4px 0 0; font-size: clamp(1.7rem, 4vw, 2.35rem); }
+.settings-dialog > p { color: var(--muted); line-height: 1.55; }
+.settings-dialog form { display: grid; gap: 10px; margin-top: 20px; }
+.settings-dialog input { width: 100%; }
+.settings-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.settings-actions .primary-button { width: auto; }
+.settings-close { border: 0; color: var(--muted); background: transparent; font-size: 1.8rem; }
+.settings-error { margin: 0; color: #8e3029; font-size: 0.82rem; }
+.danger-button {
+  min-height: 44px;
+  border: 1px solid #c98478;
+  border-radius: 10px;
+  padding: 0 13px;
+  color: #7a2e28;
+  background: #fff0ed;
+  font-weight: 780;
+}
+.settings-dialog > small { display: block; margin-top: 18px; color: var(--muted); }
+
 footer { display: flex; justify-content: space-between; gap: 15px; padding: 24px 4px 4px; color: var(--muted); font-size: 0.68rem; }
 footer strong { color: var(--forest); }
 
@@ -244,6 +293,8 @@ footer strong { color: var(--forest); }
   .send-bar { grid-template-columns: 1fr; margin: 20px -17px -17px; padding: 15px 17px; border-radius: 0 0 16px 16px; }
   footer { flex-direction: column; align-items: center; text-align: center; }
   .error-toast { left: 14px; right: 14px; bottom: 14px; }
+  .settings-actions { align-items: stretch; flex-direction: column-reverse; }
+  .settings-actions .primary-button { width: 100%; }
 }
 
 @media (prefers-reduced-motion: no-preference) {

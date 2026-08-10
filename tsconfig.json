@@ -36,6 +36,8 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
+    "desktop-runtime",
+    "dist-desktop",
     "node_modules"
   ]
 }

@@ -2,6 +2,8 @@
 node_modules/
 coverage/
 dist/
+dist-desktop/
+desktop-runtime/
 .env
 .env.local
 .vercel/

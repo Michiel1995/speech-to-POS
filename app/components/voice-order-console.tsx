@@ -16,6 +16,7 @@ import {
   resolveWithProduct,
 } from "@/src/ui/draft-actions";
 import { formatTurns, parseTranscript } from "@/src/ui/transcript";
+import { DesktopSettings } from "./desktop-settings";
 
 const DEMOS = {
   core: `Customer: Voor mij de steak saignant met frieten en pepersaus.
@@ -282,6 +283,7 @@ export function VoiceOrderConsole() {
           <h1>Service Ears</h1>
         </div>
         <div className="header-statuses">
+          <DesktopSettings />
           <span className={`network ${online ? "online" : "offline"}`}>{online ? "Online" : "Offline"}</span>
           <button className={`shift-toggle ${shiftMode ? "active" : ""}`} onClick={() => setShiftMode((value) => !value)}>
             {shiftMode ? "Shift mode on" : "Start shift"}
