@@ -120,6 +120,7 @@ try {
   });
   const order = await orderResponse.json();
   if (!orderResponse.ok) throw new Error(`Interpretation failed: ${JSON.stringify(order)}\n${serverOutput}`);
+  const warmStopToReviewMs = Math.round(performance.now() - warmStartedAt);
 
   const summary = {
     health: health.ok,
@@ -128,6 +129,7 @@ try {
     warmedModel: warmupResult?.model?.label,
     coldTranscriptionMs,
     warmTranscriptionMs,
+    warmStopToReviewMs,
     coldTranscript: coldTranscript.text,
     offlineSpeech: health.offlineSpeechConfigured,
     transcript: transcript.text,
@@ -159,6 +161,9 @@ try {
   }
   if (!summary.vadUsed || !health.offlineVadConfigured) {
     throw new Error(`Local VAD was not active.\n${JSON.stringify(summary, null, 2)}`);
+  }
+  if (summary.warmStopToReviewMs >= 5_000) {
+    throw new Error(`Hard final Review budget failed (must be below 5000 ms).\n${JSON.stringify(summary, null, 2)}`);
   }
 } finally {
   if (server.exitCode === null) {

@@ -8,6 +8,7 @@ import { findProductMentions, rankProductCandidatesForPhrase } from "@/src/seman
 import { isOrderableProduct, productSourceAliases } from "@/src/semantic-menu/product-index";
 import {
   completedBrowserSpeechText,
+  confidentBrowserSpeechFallback,
   rankSpeechHypotheses,
   safeBrowserSpeechFallback,
   speechHypothesisMargin,
@@ -67,6 +68,18 @@ describe("Service Ears 3 word recognition", () => {
     expect(orderFallback?.productIds).toEqual(expect.arrayContaining(["POS-1001", "POS-1002"]));
     expect(safeBrowserSpeechFallback([
       { text: "Mijn nonkel vertelde een lang verhaal over zijn vakantie.", acousticConfidence: 0.9 },
+    ], demoMenu)).toBeUndefined();
+  });
+
+  it("uses the hard fast-final gate only for strong, explicit menu grounding", () => {
+    expect(confidentBrowserSpeechFallback([
+      { text: "Doe mij twee Duvel", acousticConfidence: 0.74 },
+    ], demoMenu)?.productIds).toContain("POS-1001");
+    expect(confidentBrowserSpeechFallback([
+      { text: "Doe mij misschien die van daarnet", acousticConfidence: 0.9 },
+    ], demoMenu, { preferredProductIds: ["POS-1001"] })).toBeUndefined();
+    expect(confidentBrowserSpeechFallback([
+      { text: "Doe mij twee Duvel", acousticConfidence: 0.55 },
     ], demoMenu)).toBeUndefined();
   });
 

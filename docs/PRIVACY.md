@@ -19,6 +19,15 @@ a documented controller/processor assessment and local counsel.
   lines, table IDs, operation IDs or free-form server errors.
 - Correction analytics contain only a short fragment, IDs, error category, confidence,
   tenant/waiter identifiers, and timestamp.
+- The user-triggered local back-up contains the active table ID, order drafts, compact
+  per-table action/context memory, and approved pronunciation mappings. It never
+  contains audio, full transcripts, performance timing, local models, credentials,
+  browser preview state, or a copied POS menu. The JSON file leaves the laptop only
+  when the user moves it. Treat it as operational order data and store it accordingly.
+- Restoring a back-up is schema- and size-validated, bounded, and atomic. The prior
+  local state is kept as a one-step rollback. Restored drafts always become
+  `NOT_SENT`; prior POS confirmation metadata is removed and the waiter is warned to
+  recheck the current menu and availability before sending.
 - `DEBUG_RETAIN_CONVERSATION=false` is the default. The current code has no persistence
   implementation even when the flag is true; a future debug store must be separate,
   access-controlled, time-limited, and visibly enabled.

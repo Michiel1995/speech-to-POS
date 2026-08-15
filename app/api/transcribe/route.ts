@@ -7,6 +7,7 @@ import { speechTranscriptMenuScore } from "@/src/semantic-menu/matcher";
 import { isOrderableProduct } from "@/src/semantic-menu/product-index";
 import { buildSpeechVocabulary } from "@/src/speech/menu-vocabulary";
 import {
+  confidentBrowserSpeechFallback,
   rankSpeechHypotheses,
   safeBrowserSpeechFallback,
   speechHypothesisMargin,
@@ -17,6 +18,7 @@ import {
   type OfflineTranscriptionResult,
   type SpeechLanguage,
 } from "@/src/speech/offline-transcriber";
+import { FINAL_TRANSCRIPTION_BUDGET_MS } from "@/src/speech/latency-budget";
 
 export const runtime = "nodejs";
 
@@ -96,11 +98,53 @@ export async function POST(request: Request) {
       approvedAliases: approvedAliases(data.get("approvedAliases")),
     });
     const browserCandidates = browserHypotheses(data.get("browserHypotheses"));
+    const browserPreviewFinal = data.get("browserPreviewFinal") === "true";
     const rankingOptions = {
       preferredProductIds: vocabulary.preferredProductIds,
       existingProductIds: priorProductIds,
       dialectProfile,
     };
+    const edgeResponse = (
+      fallback: NonNullable<ReturnType<typeof safeBrowserSpeechFallback>>,
+      pass: "edge-live-confident" | "edge-live-budget-fallback",
+    ) => {
+      const rankedFallbacks = rankSpeechHypotheses(browserCandidates, menu, rankingOptions);
+      return NextResponse.json({
+        operationId,
+        tableId,
+        baseDraftRevision,
+        text: fallback.text,
+        turns: [{ speaker: "unknown" as const, providerSpeaker: pass, text: fallback.text }],
+        language,
+        engine: pass,
+        confidence: fallback.acousticScore,
+        vadUsed: false,
+        vadProfile: "balanced",
+        secondPassAttempted: false,
+        secondPassSelected: false,
+        hypothesisMargin: speechHypothesisMargin(rankedFallbacks),
+        hypotheses: rankedFallbacks.slice(0, 5).map((candidate, index) => ({
+          text: candidate.text,
+          confidence: candidate.acousticScore,
+          menuScore: candidate.menuScore,
+          totalScore: candidate.totalScore,
+          pass,
+          selected: index === 0,
+        })),
+        crossEngine: {
+          attempted: true,
+          selected: "edge-live-preview",
+          margin: speechHypothesisMargin(rankedFallbacks),
+          fallbackUsed: pass === "edge-live-budget-fallback",
+          localPassSkipped: pass === "edge-live-confident",
+        },
+        retained: false,
+      });
+    };
+    const confidentBrowser = browserPreviewFinal
+      ? confidentBrowserSpeechFallback(browserCandidates, menu, rankingOptions)
+      : undefined;
+    if (confidentBrowser) return edgeResponse(confidentBrowser, "edge-live-confident");
     let result: OfflineTranscriptionResult;
     try {
       result = await transcribeHospitalityAudioOffline(audio, {
@@ -115,41 +159,12 @@ export async function POST(request: Request) {
           noiseFloorRms: finiteNumber(data.get("audioNoiseFloorRms")),
         },
         preferLowLatency: contextProductIds.length === 1 && audio.size <= 800_000,
+        maxPassMs: FINAL_TRANSCRIPTION_BUDGET_MS,
       });
     } catch (error) {
-      const fallback = safeBrowserSpeechFallback(browserCandidates, menu, rankingOptions);
+      const fallback = confidentBrowserSpeechFallback(browserCandidates, menu, rankingOptions);
       if (!fallback) throw error;
-      const rankedFallbacks = rankSpeechHypotheses(browserCandidates, menu, rankingOptions);
-      return NextResponse.json({
-        operationId,
-        tableId,
-        baseDraftRevision,
-        text: fallback.text,
-        turns: [{ speaker: "unknown" as const, providerSpeaker: "edge-live-fallback", text: fallback.text }],
-        language,
-        engine: "edge-live-fallback",
-        confidence: fallback.acousticScore,
-        vadUsed: false,
-        vadProfile: "balanced",
-        secondPassAttempted: false,
-        secondPassSelected: false,
-        hypothesisMargin: speechHypothesisMargin(rankedFallbacks),
-        hypotheses: rankedFallbacks.slice(0, 5).map((candidate, index) => ({
-          text: candidate.text,
-          confidence: candidate.acousticScore,
-          menuScore: candidate.menuScore,
-          totalScore: candidate.totalScore,
-          pass: "edge-live-fallback",
-          selected: index === 0,
-        })),
-        crossEngine: {
-          attempted: true,
-          selected: "edge-live-preview",
-          margin: speechHypothesisMargin(rankedFallbacks),
-          fallbackUsed: true,
-        },
-        retained: false,
-      });
+      return edgeResponse(fallback, "edge-live-budget-fallback");
     }
     if (!browserCandidates.length) return NextResponse.json({ operationId, tableId, baseDraftRevision, ...result });
     const ranked = rankSpeechHypotheses([

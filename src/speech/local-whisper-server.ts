@@ -38,6 +38,7 @@ export interface WhisperServerPassOptions {
   vadSpeechPadMs: number;
   vadSamplesOverlap: number;
   timeoutMs: number;
+  allowCliFallback?: boolean;
 }
 
 interface RunningWhisperServer {
@@ -248,6 +249,7 @@ export async function transcribeWithLocalWhisperServer(
   } catch (error) {
     console.warn("Persistent local whisper server unavailable; using CLI fallback:", error);
     stopWhisperServer();
+    if (options.allowCliFallback === false) throw error;
     return undefined;
   } finally {
     if (server && runningServer === server) scheduleIdleUnload(server);

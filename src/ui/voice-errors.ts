@@ -8,6 +8,7 @@ export type VoiceErrorCode =
   | "NETWORK_UNAVAILABLE"
   | "POS_UNAVAILABLE"
   | "STALE_OPERATION"
+  | "TRANSCRIPTION_BUDGET_EXCEEDED"
   | "UNKNOWN";
 
 export interface UserFacingVoiceError {
@@ -18,6 +19,12 @@ export interface UserFacingVoiceError {
 }
 
 const ERROR_MESSAGES: Partial<Record<string, UserFacingVoiceError>> = {
+  TRANSCRIPTION_BUDGET_EXCEEDED: {
+    code: "TRANSCRIPTION_BUDGET_EXCEEDED",
+    title: "Binnen 5 seconden onvoldoende bewijs",
+    message: "Service Ears heeft bewust niets gegokt of gewijzigd. Schakel ‘Voorlopig concept via Microsoft Edge’ in of herhaal de korte uitspraak dichter bij de microfoon.",
+    retryable: true,
+  },
   LOCAL_SPEECH_BUSY: {
     code: "LOCAL_SPEECH_BUSY",
     title: "Spraakmodule is nog bezig",

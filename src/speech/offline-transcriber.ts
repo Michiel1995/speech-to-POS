@@ -49,6 +49,7 @@ export interface OfflineTranscriptionOptions {
     noiseFloorRms?: number;
   };
   preferLowLatency?: boolean;
+  maxPassMs?: number;
 }
 
 interface TranscriptionPass {
@@ -280,7 +281,9 @@ async function transcribeHospitalityAudioOfflineUnlocked(
       const vadMinSilenceDurationMs = quietRecording ? 440 : noisyRecording ? 260 : profile === "primary" ? 300 : 420;
       const vadSpeechPadMs = quietRecording ? 280 : noisyRecording ? 160 : profile === "primary" ? 180 : 240;
       const vadSamplesOverlap = profile === "primary" ? 0.25 : 0.30;
-      const timeoutMs = Math.max(30_000, Math.min(90_000, selection.targetLatencyMs * 3));
+      const timeoutMs = options.maxPassMs
+        ? Math.max(1_500, Math.min(5_000, options.maxPassMs))
+        : Math.max(30_000, Math.min(90_000, selection.targetLatencyMs * 3));
       const args = [
         "-m", selection.path,
         "-f", audioPath,
@@ -326,6 +329,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
           vadSpeechPadMs,
           vadSamplesOverlap,
           timeoutMs,
+          allowCliFallback: !options.maxPassMs,
         });
         if (serverResult) {
           persistentServerUsed = true;
@@ -352,6 +356,13 @@ async function transcribeHospitalityAudioOfflineUnlocked(
     try {
       primary = await runPass("primary", options.primaryPrompt, "primary", activeModel);
     } catch (error) {
+      if (options.maxPassMs) {
+        throw new DomainError(
+          "De lokale eindcontrole bereikte de tijdslimiet. Gebruik live tekst voor een snelle, menu-gegronde fallback of probeer opnieuw.",
+          "TRANSCRIPTION_BUDGET_EXCEEDED",
+          504,
+        );
+      }
       const fallback = selectLocalWhisperModel({}, [activeModel.id]);
       if (!fallback) {
         const message = error instanceof Error ? error.message : String(error);
@@ -380,6 +391,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
     const decoding = decodingProfile(activeModel);
     const shouldRetry = Boolean(
       options.retryPrompt &&
+      !options.maxPassMs &&
       (decoding.maxPasses >= 2 || strongestModel?.id !== activeModel.id) &&
       primary.confidence < decoding.retryConfidence &&
       primary.score < 5,
@@ -397,6 +409,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
     const bestFirstPass = [...firstPasses].sort((left, right) => passQuality(right) - passQuality(left))[0];
     const needsRescue = Boolean(
       options.retryPrompt &&
+      !options.maxPassMs &&
       decoding.maxPasses >= 3 &&
       retry &&
       bestFirstPass.confidence < 0.58 &&

@@ -12,12 +12,12 @@ export interface StoredTableContext {
   updatedAt: string;
 }
 
-const ContextSchema = z.object({
+export const ContextSchema = z.object({
   productIds: z.array(z.string().min(1)).max(12),
   updatedAt: z.string().datetime(),
 });
 
-const TableMemoryEventSchema = z.object({
+export const TableMemoryEventSchema = z.object({
   id: z.string().min(1),
   tableId: z.string().min(1),
   utteranceId: z.string().min(1),
@@ -30,9 +30,9 @@ const TableMemoryEventSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
-const DraftRecordSchema = z.record(z.string(), DraftOrderSchema);
-const ContextRecordSchema = z.record(z.string(), ContextSchema);
-const EventsRecordSchema = z.record(z.string(), z.array(TableMemoryEventSchema).max(60));
+export const DraftRecordSchema = z.record(z.string(), DraftOrderSchema);
+export const ContextRecordSchema = z.record(z.string(), ContextSchema);
+export const EventsRecordSchema = z.record(z.string(), z.array(TableMemoryEventSchema).max(60));
 
 function parseRecord<T>(value: string | null, schema: z.ZodType<T>): T | undefined {
   if (!value) return undefined;

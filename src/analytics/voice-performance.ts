@@ -4,6 +4,7 @@ export interface VoicePerformanceSample {
   outcome: "ready" | "sent" | "error" | "cancelled";
   totalMs: number;
   stopToReviewMs?: number;
+  provisionalStopToReviewMs?: number;
   transcriptionMs?: number;
   interpretationMs?: number;
   createdAt: string;
@@ -15,6 +16,8 @@ export interface VoicePerformanceSummary {
   totalP95Ms: number;
   stopToReviewP50Ms?: number;
   stopToReviewP95Ms?: number;
+  provisionalStopToReviewP50Ms?: number;
+  provisionalStopToReviewP95Ms?: number;
   errorRate: number;
 }
 
@@ -59,12 +62,15 @@ export function percentile(values: number[], quantile: number): number {
 
 export function summarizeVoicePerformance(samples: VoicePerformanceSample[]): VoicePerformanceSummary {
   const stopToReview = samples.map((sample) => sample.stopToReviewMs).filter(finiteNonNegative);
+  const provisionalStopToReview = samples.map((sample) => sample.provisionalStopToReviewMs).filter(finiteNonNegative);
   return {
     samples: samples.length,
     totalP50Ms: percentile(samples.map((sample) => sample.totalMs), 0.5),
     totalP95Ms: percentile(samples.map((sample) => sample.totalMs), 0.95),
     stopToReviewP50Ms: stopToReview.length ? percentile(stopToReview, 0.5) : undefined,
     stopToReviewP95Ms: stopToReview.length ? percentile(stopToReview, 0.95) : undefined,
+    provisionalStopToReviewP50Ms: provisionalStopToReview.length ? percentile(provisionalStopToReview, 0.5) : undefined,
+    provisionalStopToReviewP95Ms: provisionalStopToReview.length ? percentile(provisionalStopToReview, 0.95) : undefined,
     errorRate: samples.length ? samples.filter((sample) => sample.outcome === "error").length / samples.length : 0,
   };
 }
@@ -78,7 +84,7 @@ export class VoicePerformanceTrace {
     private readonly startedAtMs: number,
   ) {}
 
-  mark(name: "stop" | "transcription-start" | "transcription-end" | "interpretation-start" | "interpretation-end", nowMs: number): void {
+  mark(name: "stop" | "provisional-review" | "transcription-start" | "transcription-end" | "interpretation-start" | "interpretation-end", nowMs: number): void {
     this.marks.set(name, nowMs);
   }
 
@@ -89,12 +95,16 @@ export class VoicePerformanceTrace {
       return startMs === undefined || endMs === undefined ? undefined : Math.max(0, Math.round(endMs - startMs));
     };
     const stopMs = this.marks.get("stop");
+    const provisionalReviewMs = this.marks.get("provisional-review");
     return {
       operationId: this.operationId,
       kind: this.kind,
       outcome,
       totalMs: Math.max(0, Math.round(nowMs - this.startedAtMs)),
       stopToReviewMs: stopMs === undefined ? undefined : Math.max(0, Math.round(nowMs - stopMs)),
+      provisionalStopToReviewMs: stopMs === undefined || provisionalReviewMs === undefined
+        ? undefined
+        : Math.max(0, Math.round(provisionalReviewMs - stopMs)),
       transcriptionMs: duration("transcription-start", "transcription-end"),
       interpretationMs: duration("interpretation-start", "interpretation-end"),
       createdAt,

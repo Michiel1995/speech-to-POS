@@ -27,6 +27,7 @@ import {
   parseEventsRecord,
   serializeLocalState,
 } from "@/src/memory/local-state";
+import { LOCAL_STORAGE_KEYS } from "@/src/memory/storage-keys";
 import type { PlannedOrderAction } from "@/src/order-understanding/order-actions";
 import type {
   ConversationTurn,
@@ -45,6 +46,7 @@ import {
   resolveWithProduct,
 } from "@/src/ui/draft-actions";
 import { completedBrowserSpeechText, rankSpeechHypotheses } from "@/src/speech/recognition-ranker";
+import { evaluateVoiceLatencyGate, FINAL_REVIEW_BUDGET_MS, PROVISIONAL_REVIEW_BUDGET_MS } from "@/src/speech/latency-budget";
 import { findProductMentions } from "@/src/semantic-menu/matcher";
 import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
 import { formatTurns, parseTranscript, shouldClearTranscriptAfterSuccess } from "@/src/ui/transcript";
@@ -66,6 +68,7 @@ import {
 } from "@/src/ui/voice-operation";
 import { DesktopSettings } from "./desktop-settings";
 import { LanguageManager } from "./language-manager";
+import { BackupManager } from "./backup-manager";
 
 const DEMOS = {
   core: `Customer: Voor mij de steak saignant met frieten en pepersaus.
@@ -127,10 +130,10 @@ interface ReviewActivity {
   detail: string;
 }
 
-const DRAFTS_BY_TABLE_KEY = "service-ears:drafts-by-table";
-const CONTEXT_BY_TABLE_KEY = "service-ears:context-by-table";
-const EVENTS_BY_TABLE_KEY = "service-ears:events-by-table:v2";
-const LANGUAGE_LEARNING_KEY = "service-ears:language-learning:v2";
+const DRAFTS_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.drafts;
+const CONTEXT_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.context;
+const EVENTS_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.events;
+const LANGUAGE_LEARNING_KEY = LOCAL_STORAGE_KEYS.languageLearning;
 const LIVE_PREVIEW_KEY = "service-ears:live-edge-preview:v1";
 const VOICE_PERFORMANCE_KEY = "service-ears:voice-performance:v1";
 
@@ -266,6 +269,7 @@ export function VoiceOrderConsole() {
   const [autoProcessOnSilence, setAutoProcessOnSilence] = useState(true);
   const [livePreviewGuidance, setLivePreviewGuidance] = useState<string>();
   const [provisionalProducts, setProvisionalProducts] = useState<Array<{ id: string; name: string }>>([]);
+  const [provisionalDraft, setProvisionalDraft] = useState<DraftOrder>();
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("IDLE");
   const [performanceSamples, setPerformanceSamples] = useState<VoicePerformanceSample[]>([]);
   const recordingStream = useRef<MediaStream | undefined>(undefined);
@@ -284,6 +288,10 @@ export function VoiceOrderConsole() {
   const livePreviewText = useRef("");
   const livePreviewFinalText = useRef("");
   const livePreviewActive = useRef(false);
+  const provisionalReviewTimer = useRef<number | undefined>(undefined);
+  const provisionalReviewController = useRef<AbortController | undefined>(undefined);
+  const provisionalReviewText = useRef("");
+  const provisionalReviewMarkedOperationId = useRef("");
   const recordingPurposeRef = useRef<"conversation" | "correction" | undefined>(undefined);
   const heardVoice = useRef(false);
   const consecutiveVoiceFrames = useRef(0);
@@ -306,6 +314,10 @@ export function VoiceOrderConsole() {
     ...(draft?.lines.map((line) => line.productId).reverse() ?? []),
   ])].slice(0, 12), [contextProductIds, draft]);
   const performanceSummary = useMemo(() => summarizeVoicePerformance(performanceSamples), [performanceSamples]);
+  const latencyGate = useMemo(() => evaluateVoiceLatencyGate({
+    provisionalP95Ms: performanceSummary.provisionalStopToReviewP95Ms,
+    finalP95Ms: performanceSummary.stopToReviewP95Ms,
+  }), [performanceSummary]);
 
   const beginOperation = useCallback((kind: VoiceOperationKind): VoiceOperationToken => {
     const token = operationCoordinator.current.begin({
@@ -315,7 +327,14 @@ export function VoiceOrderConsole() {
     });
     recordingOperation.current = kind === "conversation" || kind === "correction" ? token : undefined;
     performanceTrace.current = new VoicePerformanceTrace(token.id, kind, token.startedAtMs);
+    if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+    provisionalReviewController.current?.abort();
+    provisionalReviewTimer.current = undefined;
+    provisionalReviewController.current = undefined;
+    provisionalReviewText.current = "";
+    provisionalReviewMarkedOperationId.current = "";
     setProvisionalProducts([]);
+    setProvisionalDraft(undefined);
     setVoicePhase(kind === "send" ? "SENDING" : kind === "text" ? "INTERPRETING" : "LISTENING");
     return token;
   }, []);
@@ -338,8 +357,15 @@ export function VoiceOrderConsole() {
     operationCoordinator.current.complete(token);
     if (recordingOperation.current?.id === token.id) recordingOperation.current = undefined;
     if (performanceTrace.current?.operationId === token.id) performanceTrace.current = undefined;
+    if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+    provisionalReviewController.current?.abort();
+    provisionalReviewTimer.current = undefined;
+    provisionalReviewController.current = undefined;
+    provisionalReviewText.current = "";
+    provisionalReviewMarkedOperationId.current = "";
     setVoicePhase(phase);
     setProvisionalProducts([]);
+    setProvisionalDraft(undefined);
     setBusy(false);
     return true;
   }, []);
@@ -349,13 +375,72 @@ export function VoiceOrderConsole() {
     draftRevision: draftRevision(draftRef.current),
   }), []);
 
+  const requestProvisionalReview = useCallback((
+    rawText: string,
+    operation: VoiceOperationToken,
+    immediate = false,
+  ) => {
+    const text = rawText.replace(/\s+/g, " ").trim();
+    if (!text || !menu || !selectedTable || !operationCoordinator.current.isActive(operation)) return;
+    if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+    provisionalReviewController.current?.abort();
+    provisionalReviewText.current = text;
+
+    provisionalReviewTimer.current = window.setTimeout(() => {
+      const controller = new AbortController();
+      provisionalReviewController.current = controller;
+      provisionalReviewTimer.current = undefined;
+      const priorLines = draftRef.current?.lines;
+      void fetch("/api/interpret", {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          operationId: `preview-${operation.id}`.slice(0, 100),
+          baseDraftRevision: operation.baseDraftRevision,
+          tenantId: menu.tenantId,
+          tableId: selectedTable.id,
+          tableLabel: selectedTable.label,
+          waiterId: "waiter-demo",
+          source: "audio",
+          engine: "deterministic",
+          turns: [{ speaker: "customer", text }],
+          priorLines,
+          contextProductIds,
+          dialectProfile,
+          approvedAliases: approvedAliases(learningState),
+        }),
+      }).then(async (response) => {
+        if (!response.ok) return undefined;
+        return await response.json() as { draft?: DraftOrder };
+      }).then((result) => {
+        if (!result?.draft || controller.signal.aborted) return;
+        if (provisionalReviewText.current !== text || !mayCommitOperation(operation)) return;
+        setProvisionalDraft(result.draft);
+        setProvisionalProducts([]);
+        setVoicePhase("PROVISIONAL_REVIEW");
+        if (provisionalReviewMarkedOperationId.current !== operation.id) {
+          provisionalReviewMarkedOperationId.current = operation.id;
+          performanceTrace.current?.mark("provisional-review", performance.now());
+        }
+        setReviewActivity({
+          phase: "updated",
+          title: "Voorlopig concept klaar",
+          detail: "De snelle menucontrole is zichtbaar; de definitieve controle rondt uiterlijk binnen vijf seconden af of vraagt bevestiging.",
+        });
+      }).catch((error: unknown) => {
+        if (!isAbortError(error)) setLivePreviewGuidance("Live concept lukte niet; de lokale eindcontrole loopt verder.");
+      });
+    }, immediate ? 0 : 220);
+  }, [contextProductIds, dialectProfile, learningState, mayCommitOperation, menu, selectedTable]);
+
   useEffect(() => {
     const hydrateTimer = window.setTimeout(() => {
       const BrowserRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
       setSpeechMode(window.serviceEarsDesktop ? "offline" : BrowserRecognition ? "browser" : "unavailable");
       const cachedMenu = localStorage.getItem("service-ears:menu");
       const savedDraft = localStorage.getItem("service-ears:draft");
-      const savedTable = localStorage.getItem("service-ears:table");
+      const savedTable = localStorage.getItem(LOCAL_STORAGE_KEYS.activeTable);
       const restoredTableId = savedTable || "TABLE-12";
       if (cachedMenu) {
         try { setMenuResponse(JSON.parse(cachedMenu) as MenuResponse); } catch { /* ignore corrupt cache */ }
@@ -419,6 +504,8 @@ export function VoiceOrderConsole() {
     if (browserRecognitionStopTimer.current) window.clearTimeout(browserRecognitionStopTimer.current);
     livePreviewActive.current = false;
     livePreviewRecognition.current?.abort();
+    if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+    provisionalReviewController.current?.abort();
     if (silenceTimer.current) window.clearInterval(silenceTimer.current);
     recordingStream.current?.getTracks().forEach((track) => track.stop());
     audioSource.current?.disconnect();
@@ -439,7 +526,7 @@ export function VoiceOrderConsole() {
   }, [tableId]);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem("service-ears:table", tableId);
+    if (hydrated) localStorage.setItem(LOCAL_STORAGE_KEYS.activeTable, tableId);
   }, [hydrated, tableId]);
 
   useEffect(() => {
@@ -603,6 +690,7 @@ export function VoiceOrderConsole() {
     operation: VoiceOperationToken,
     audioQuality?: AudioQualityResult,
     browserPreview?: string,
+    browserPreviewFinal = false,
     preparation?: PreparedSpeechPcm,
   ) => {
     if (!operationCoordinator.current.isActive(operation)) return;
@@ -628,6 +716,7 @@ export function VoiceOrderConsole() {
       data.append("approvedAliases", JSON.stringify(approvedAliases(learningState)));
       if (browserPreview?.trim()) {
         data.append("browserHypotheses", JSON.stringify([{ text: browserPreview.trim(), confidence: 0.74 }]));
+        data.append("browserPreviewFinal", String(browserPreviewFinal));
       }
       if (audioQuality) {
         data.append("audioRms", String(audioQuality.rms));
@@ -769,6 +858,7 @@ export function VoiceOrderConsole() {
       browserRecognitionPreviewText.current = preview;
       if (purpose === "conversation" && preview) {
         setTranscript(`Customer: ${preview}`);
+        requestProvisionalReview(preview, operation);
         if (menu) {
           const products = [...new Map(findProductMentions(preview, menu, { preferredProductIds: speechPreferredProductIds })
             .flatMap((mention) => mention.candidates.slice(0, 1))
@@ -819,7 +909,7 @@ export function VoiceOrderConsole() {
     recognition.start();
   };
 
-  const startOfflineLivePreview = (purpose: "conversation" | "correction") => {
+  const startOfflineLivePreview = (purpose: "conversation" | "correction", operation: VoiceOperationToken) => {
     const BrowserRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!livePreviewEnabled || !BrowserRecognition) return;
     const recognition = new BrowserRecognition();
@@ -844,6 +934,7 @@ export function VoiceOrderConsole() {
       livePreviewText.current = preview;
       if (!preview || purpose !== "conversation") return;
       setTranscript(`Customer: ${preview}`);
+      requestProvisionalReview(preview, operation);
       const advice = menu ? culinaryAdviceForText(preview, menu) : undefined;
       const recognizedProducts = menu
         ? [...new Map(findProductMentions(preview, menu, { preferredProductIds: speechPreferredProductIds })
@@ -990,7 +1081,7 @@ export function VoiceOrderConsole() {
       audioProcessor.current = processor;
       audioSink.current = sink;
       setRecording(purpose);
-      startOfflineLivePreview(purpose);
+      startOfflineLivePreview(purpose, operation);
       silenceTimer.current = window.setInterval(() => {
         const elapsedSeconds = context.currentTime - recordingStartedAt.current;
         const finishDelaySeconds = adaptiveNoiseFloor.current >= 0.018 ? 1.55 : 1.9;
@@ -1039,6 +1130,8 @@ export function VoiceOrderConsole() {
       silenceTimer.current = undefined;
       livePreviewActive.current = false;
       const browserPreview = livePreviewText.current.trim();
+      const browserPreviewFinal = Boolean(livePreviewFinalText.current.trim());
+      if (browserPreview && purpose === "conversation") requestProvisionalReview(browserPreview, operation, true);
       livePreviewRecognition.current?.stop();
       livePreviewRecognition.current = undefined;
       audioSource.current?.disconnect();
@@ -1082,7 +1175,7 @@ export function VoiceOrderConsole() {
       if (qualityMessage) setSpeechInsight(qualityMessage);
       setRecording(undefined);
       setAudioLevel(0);
-      await uploadRecording(blob, purpose, operation, audioQuality, browserPreview, preparation);
+      await uploadRecording(blob, purpose, operation, audioQuality, browserPreview, browserPreviewFinal, preparation);
     } catch (reason) {
       setRecording(undefined);
       const message = reason instanceof Error ? reason.message : "De opname kon niet worden verwerkt.";
@@ -1201,6 +1294,7 @@ export function VoiceOrderConsole() {
         <div className="header-statuses">
           <DesktopSettings />
           <LanguageManager menu={menu} state={learningState} onChange={setLearningState} />
+          <BackupManager />
           <span className={`network ${speechMode === "unavailable" ? "offline" : "online"}`}>
             {speechMode === "offline" ? "100% lokaal" : speechMode === "browser" ? "Gratis browsertest" : speechMode === "unavailable" ? "Open in Microsoft Edge" : "Spraak controleren…"}
           </span>
@@ -1219,6 +1313,9 @@ export function VoiceOrderConsole() {
             operationCoordinator.current.cancel();
             setVoicePhase("CANCELLED");
             setProvisionalProducts([]);
+            setProvisionalDraft(undefined);
+            if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+            provisionalReviewController.current?.abort();
             const nextDraft = draftForTable(nextTableId);
             tableIdRef.current = nextTableId;
             draftRef.current = nextDraft;
@@ -1263,7 +1360,7 @@ export function VoiceOrderConsole() {
                   disabled={Boolean(recording)}
                   onChange={(event) => setLivePreviewEnabled(event.target.checked)}
                 />
-                Live tekst tijdens praten via Microsoft Edge
+                Voorlopig concept binnen 2 seconden via Microsoft Edge
                 <small>Internet nodig · lokale Whisper blijft de definitieve controle</small>
               </label>
               <label className="live-preview-toggle">
@@ -1273,7 +1370,7 @@ export function VoiceOrderConsole() {
                   disabled={Boolean(recording)}
                   onChange={(event) => setAutoProcessOnSilence(event.target.checked)}
                 />
-                Automatisch afronden na stilte
+                Automatisch afronden na stilte · definitief binnen 5 seconden
                 <small>Na 1,6–1,9 seconden echte stilte boven het gemeten ruisniveau</small>
               </label>
               </div>
@@ -1302,6 +1399,9 @@ export function VoiceOrderConsole() {
           ? ` · stop tot Review p50 ${((performanceSummary.stopToReviewP50Ms ?? performanceSummary.totalP50Ms) / 1_000).toFixed(1)} s · p95 ${((performanceSummary.stopToReviewP95Ms ?? performanceSummary.totalP95Ms) / 1_000).toFixed(1)} s · n=${performanceSummary.samples}`
           : " · meting start bij de eerste verwerking"}
       </p>
+      {latencyGate.measured && <p className={`performance-slo ${latencyGate.passed ? "is-green" : "is-red"}`}>
+        Harde snelheidspoort · voorlopig p95 {((performanceSummary.provisionalStopToReviewP95Ms ?? 0) / 1_000).toFixed(1)} s / {(PROVISIONAL_REVIEW_BUDGET_MS / 1_000).toFixed(1)} s · definitief p95 {((performanceSummary.stopToReviewP95Ms ?? 0) / 1_000).toFixed(1)} s / {(FINAL_REVIEW_BUDGET_MS / 1_000).toFixed(1)} s
+      </p>}
 
       <section className="workspace-grid">
         <div className="panel capture-panel">
@@ -1354,6 +1454,9 @@ export function VoiceOrderConsole() {
               performanceTrace.current = undefined;
               setVoicePhase("IDLE");
               setProvisionalProducts([]);
+              setProvisionalDraft(undefined);
+              if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+              provisionalReviewController.current?.abort();
               draftRef.current = undefined;
               setDraft(undefined);
               setAssistantMessage(undefined);
@@ -1406,7 +1509,23 @@ export function VoiceOrderConsole() {
           )}
 
           {!draft && <div className="empty-state"><span>⌁</span><strong>Nog geen bestelconcept</strong><p>Gevalideerde producten verschijnen hier automatisch.</p></div>}
-          {provisionalProducts.length > 0 && (
+          {provisionalDraft && (
+            <div className="provisional-review provisional-draft" role="status" aria-live="polite">
+              <span className="provisional-pulse" aria-hidden="true" />
+              <div>
+                <strong>Voorlopig concept · snelle menucontrole</strong>
+                {provisionalDraft.lines.length > 0
+                  ? <div className="provisional-lines">{provisionalDraft.lines.map((line) => <p key={line.lineId}>
+                    <b>{line.quantity}× {line.canonicalName}</b>
+                    {line.modifiers.length > 0 && <span> · {line.modifiers.map((modifier) => modifier.canonicalName).join(", ")}</span>}
+                  </p>)}</div>
+                  : <p>Nog geen veilige bestellijn; context of vraag wordt gecontroleerd.</p>}
+                {provisionalDraft.issues.some((issue) => issue.blocking) && <small>Bevestiging nodig voor {provisionalDraft.issues.filter((issue) => issue.blocking).length} onzeker punt.</small>}
+                <small>Nog niet bestelbaar; definitieve controle volgt uiterlijk binnen vijf seconden.</small>
+              </div>
+            </div>
+          )}
+          {!provisionalDraft && provisionalProducts.length > 0 && (
             <div className="provisional-review" role="status" aria-live="polite">
               <span className="provisional-pulse" aria-hidden="true" />
               <div>

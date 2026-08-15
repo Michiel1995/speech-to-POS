@@ -21,6 +21,10 @@ changes, historical references, composite items, noise, and person/shared contex
   safety cases for out-of-menu recognition, alternative guidance, active seasonal
   dishes, stories, and menu-hallucination resistance. The backing seed document
   expands to over 1,000 acoustic aliases and over 3,000 request forms.
+- `transcribe-latency-route.test.ts` is a hard release contract: a confident,
+  explicitly menu-grounded Edge hypothesis must reach a correct deterministic concept
+  in under 2 seconds without starting Whisper; vague context must use local checking;
+  and a timed-out vague/noisy result must return a no-guess error without mutation.
 
 ## Pilot metric
 
@@ -33,6 +37,11 @@ pilot set—not the deterministic rules-only subset.
 
 Also capture corrections/order, false uncertainty, latency, POS submission success,
 and time saved per shift. Do not compute employee rankings.
+
+The runtime gate is strict: provisional p95 must remain below 2,000 ms and final p95
+below 5,000 ms. Speed never lowers the factuality threshold. Product ambiguity,
+quantity uncertainty, required modifiers, removals and low-evidence audio remain
+blocking confirmation states rather than fast guesses.
 
 ## Current result
 

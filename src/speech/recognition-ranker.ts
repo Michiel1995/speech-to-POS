@@ -73,6 +73,27 @@ export function safeBrowserSpeechFallback(
   return hasUsefulEvidence && best.totalScore >= 0.42 ? best : undefined;
 }
 
+/**
+ * A browser hypothesis may bypass the slower local pass only when it has
+ * strong acoustic evidence, a clear ranking margin and explicit menu
+ * grounding. Context-only removals and vague references deliberately keep
+ * using the local verifier.
+ */
+export function confidentBrowserSpeechFallback(
+  hypotheses: SpeechHypothesis[],
+  menu: TenantMenu,
+  options: SpeechHypothesisRankingOptions = {},
+): RankedSpeechHypothesis | undefined {
+  const ranked = rankSpeechHypotheses(hypotheses, menu, options);
+  const best = safeBrowserSpeechFallback(hypotheses, menu, options);
+  if (!best) return undefined;
+  const margin = ranked.length === 1 ? 1 : speechHypothesisMargin(ranked);
+  const explicitlyMenuGrounded = best.productIds.length > 0 && best.menuScore >= 0.04;
+  return best.acousticScore >= 0.7 && best.totalScore >= 0.52 && margin >= 0.04 && explicitlyMenuGrounded
+    ? best
+    : undefined;
+}
+
 const ARTIFACT_PATTERN = /\[(?:blank_audio|music|applause|laughter)\]|(\b\w+\b)(?:\s+\1){3,}/i;
 const HOSPITALITY_WORDS = /\b(?:neem|wil|graag|geef|doe|breng|bestel|erbij|menu|kaart|bier|wijn|water|koffie|voorgerecht|hoofdgerecht|dessert|rekening|hebben|welke|wat|hoeveel|sans|avec|pour|please|have)\b/;
 

@@ -12,6 +12,12 @@ import { InterpretRequestSchema } from "@/src/domain/schemas";
 import { MockPOSAdapter } from "@/src/pos/mock-adapter";
 import { customer, interpret } from "@/tests/helpers";
 import { parseDraftRecord, serializeLocalState } from "@/src/memory/local-state";
+import {
+  evaluateVoiceLatencyGate,
+  FINAL_REVIEW_BUDGET_MS,
+  FINAL_TRANSCRIPTION_BUDGET_MS,
+  PROVISIONAL_REVIEW_BUDGET_MS,
+} from "@/src/speech/latency-budget";
 
 describe("voice operation race safety", () => {
   it("aborts the previous operation when a newer one begins", () => {
@@ -47,6 +53,7 @@ describe("privacy-safe latency metrics", () => {
   it("measures stop-to-review, transcription and interpretation separately", () => {
     const trace = new VoicePerformanceTrace("voice-1", "conversation", 0);
     trace.mark("stop", 1_000);
+    trace.mark("provisional-review", 1_550);
     trace.mark("transcription-start", 1_050);
     trace.mark("transcription-end", 2_050);
     trace.mark("interpretation-start", 2_050);
@@ -54,6 +61,7 @@ describe("privacy-safe latency metrics", () => {
     expect(trace.finish("ready", 2_400, "2026-08-14T10:00:00.000Z")).toMatchObject({
       totalMs: 2_400,
       stopToReviewMs: 1_400,
+      provisionalStopToReviewMs: 550,
       transcriptionMs: 1_000,
       interpretationMs: 300,
     });
@@ -70,6 +78,27 @@ describe("privacy-safe latency metrics", () => {
     expect(summarizeVoicePerformance(samples)).toMatchObject({ totalP50Ms: 300, totalP95Ms: 5_000, errorRate: 0.2 });
   });
 
+  it("reports the provisional two-second and final five-second gates separately", () => {
+    const samples = [
+      { operationId: "v1", kind: "conversation" as const, outcome: "ready" as const, totalMs: 4_400, provisionalStopToReviewMs: 600, stopToReviewMs: 4_000, createdAt: "2026-08-14T10:00:00.000Z" },
+      { operationId: "v2", kind: "conversation" as const, outcome: "ready" as const, totalMs: 5_000, provisionalStopToReviewMs: 1_800, stopToReviewMs: 4_800, createdAt: "2026-08-14T10:00:00.000Z" },
+    ];
+    expect(summarizeVoicePerformance(samples)).toMatchObject({
+      provisionalStopToReviewP50Ms: 600,
+      provisionalStopToReviewP95Ms: 1_800,
+      stopToReviewP95Ms: 4_800,
+    });
+  });
+
+  it("fails the hard latency gate at the boundary and reserves final render time", () => {
+    expect(PROVISIONAL_REVIEW_BUDGET_MS).toBe(2_000);
+    expect(FINAL_REVIEW_BUDGET_MS).toBe(5_000);
+    expect(FINAL_TRANSCRIPTION_BUDGET_MS).toBeLessThan(FINAL_REVIEW_BUDGET_MS);
+    expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 4_999 }).passed).toBe(true);
+    expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 2_000, finalP95Ms: 4_999 }).passed).toBe(false);
+    expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 5_000 }).passed).toBe(false);
+  });
+
   it("bounds and validates persisted samples", () => {
     let samples = [] as ReturnType<typeof parseVoicePerformanceSamples>;
     for (let index = 0; index < 120; index += 1) {
@@ -84,6 +113,14 @@ describe("privacy-safe latency metrics", () => {
 });
 
 describe("typed user-facing errors", () => {
+  it("turns a five-second timeout into a no-guess action", () => {
+    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED", status: 504 })).toMatchObject({
+      title: "Binnen 5 seconden onvoldoende bewijs",
+      retryable: true,
+    });
+    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).toContain("niets gegokt");
+  });
+
   it("never exposes Failed to fetch", () => {
     expect(userFacingVoiceError({ message: "Failed to fetch" }).message).not.toMatch(/failed to fetch/i);
   });

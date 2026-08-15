@@ -6,8 +6,9 @@
    renderer captures mono PCM and an adaptive detector finishes after roughly
    1.6–1.9 seconds below the speech-over-noise threshold.
 2. When explicitly enabled, Microsoft Edge supplies provisional transcript deltas
-   while the guest speaks. These render immediately but never bypass the final local
-   pass; disabling the option keeps the entire path local.
+   while the guest speaks. A debounced localhost interpretation renders a complete
+   provisional concept (quantities and modifiers included) without mutating stored
+   order state. Disabling the option keeps the entire path local.
 3. The renderer downsamples to 16 kHz, high-pass filters low-frequency rumble, trims
    non-speech before/after the utterance, applies bounded normalization, and encodes a
    16-bit WAV in memory. Pauses inside the utterance remain intact.
@@ -23,10 +24,12 @@
    utterances and unloads it after three idle minutes. Only one transcription runs at
    once, no more than two wait, and CPU use is capped to at most six threads in the
    portable build. The CLI remains an automatic process-level fallback.
-8. The decoder uses bounded beam/best-of search. A retry only occurs when acoustic
-   confidence is low *and* menu/context evidence is weak. A short answer with exactly
-   one offered product may use the installed Small model as a safe low-latency path;
-   open orders and ambiguous choices stay on the strongest available model.
+8. The hard user-visible budgets are provisional Review p95 below 2 seconds and final
+   Review p95 below 5 seconds. A final Edge hypothesis may skip Whisper only when it
+   has strong acoustic confidence, an explicit active-menu match, a safe order intent,
+   and a clear score margin. Otherwise local Small gets a 4.2-second pass budget.
+   Exceeding that budget may use only the same strict menu-grounded fallback; vague or
+   noisy speech returns `TRANSCRIPTION_BUDGET_EXCEEDED` and mutates nothing.
 9. A shared hypothesis ranker combines acoustic confidence, phonetic distance,
    active-menu fit, current category, table history, existing order lines, dialogue
    intent and decoder-artifact penalties. The score margin remains available to the UI.
@@ -58,6 +61,9 @@ automatic detection. A fixed language is preferable for short restaurant utteran
 - The free local Whisper final pass still runs per completed turn rather than decoding
   PCM token-by-token. Opt-in Edge supplies live provisional deltas; automatic silence
   detection removes the need to press Stop for ordinary turns.
+- The sub-two-second complete provisional concept requires the explicit Edge option
+  and internet access. Fully local mode remains private but cannot honestly guarantee
+  that latency on every CPU; it still enforces the five-second no-guess outcome budget.
 - The local model uses linguistic waiter markers but does not perform biometric
   speaker identification or full acoustic diarization.
 - Nearby speech, overlapping speakers, strong Belgian accents, music, and very unclear

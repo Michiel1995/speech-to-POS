@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "product": "Service Ears",
+  "createdAt": "2026-08-15T04:00:00.000Z",
+  "data": {
+    "activeTableId": "TABLE-7",
+    "draftsByTable": {
+      "TABLE-7": {
+        "id": "browser-restore-draft",
+        "tenantId": "tenant-demo-brussels",
+        "tableId": "TABLE-7",
+        "tableLabel": "Table 7",
+        "createdBy": "waiter-demo",
+        "lastEditedBy": "waiter-demo",
+        "sentBy": "waiter-demo",
+        "status": "SENT",
+        "source": "audio",
+        "lines": [{
+          "lineId": "browser-restore-line",
+          "productId": "POS-1001",
+          "sku": "DUVEL-33",
+          "posName": "DUVEL 33",
+          "canonicalName": "Duvel",
+          "category": "Beer",
+          "quantity": 2,
+          "course": "drinks",
+          "modifiers": [],
+          "notes": [],
+          "confidence": 0.97
+        }],
+        "issues": [],
+        "warnings": [],
+        "createdAt": "2026-08-15T04:00:00.000Z",
+        "updatedAt": "2026-08-15T04:00:00.000Z",
+        "interpretationLatencyMs": 180,
+        "posSubmission": {
+          "adapter": "mock-pos",
+          "externalOrderId": "browser-old-pos-order",
+          "idempotencyKey": "browser-old-idempotency-key",
+          "confirmedByWaiter": false,
+          "sentAt": "2026-08-15T04:00:00.000Z"
+        }
+      }
+    },
+    "contextByTable": {
+      "TABLE-7": {
+        "productIds": ["POS-1001"],
+        "updatedAt": "2026-08-15T04:00:00.000Z"
+      }
+    },
+    "eventsByTable": { "TABLE-7": [] },
+    "approvedLanguage": {
+      "version": 2,
+      "mappings": [{
+        "id": "mapping:POS-1001:duvelke",
+        "spokenFragment": "duvelke",
+        "productId": "POS-1001",
+        "evidenceCount": 3,
+        "status": "APPROVED",
+        "createdAt": "2026-08-15T04:00:00.000Z",
+        "updatedAt": "2026-08-15T04:00:00.000Z"
+      }]
+    }
+  }
+}
