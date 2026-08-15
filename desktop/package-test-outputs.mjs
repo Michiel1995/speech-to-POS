@@ -1,7 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { verifyPackageChecksums, writePackageChecksums } from "./package-integrity.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = path.resolve(projectRoot, "..", "..");
@@ -56,13 +57,13 @@ function syncRuntime(destination) {
   }
 }
 
-function sha256(filePath) {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
-}
-
-function writeChecksums(root, relativeFiles) {
-  const lines = relativeFiles.map((relative) => `${sha256(path.join(root, relative))}  ${relative.replaceAll("\\", "/")}`);
-  fs.writeFileSync(path.join(root, "CHECKSUMS-SHA256.txt"), `${lines.join("\r\n")}\r\n`, "utf8");
+function sealPackage(root) {
+  const written = writePackageChecksums(root);
+  const verified = verifyPackageChecksums(root);
+  if (!verified.ok || verified.checkedFiles !== written.files) {
+    throw new Error(`Package-integriteit faalde voor ${root}: ${JSON.stringify(verified)}`);
+  }
+  return { files: verified.checkedFiles, manifestSha256: written.manifestSha256 };
 }
 
 assertSource(path.join(runtimeRoot, "server-bootstrap.cjs"));
@@ -76,7 +77,7 @@ fs.copyFileSync(nodeExecutable, path.join(browserTarget, "node", "node.exe"));
 copy(path.join(projectRoot, "browser-test", "Start-Service-Ears-Browsertest.cmd"), path.join(browserTarget, "Start-Service-Ears-Browsertest.cmd"));
 copy(path.join(projectRoot, "browser-test", "LEESMIJ.txt"), path.join(browserTarget, "LEESMIJ.txt"));
 fs.writeFileSync(path.join(browserTarget, "VERSIE.txt"), "Service Ears 3.5 browsertest\r\nStabiele voorlopige Review, monotone bewerkingen, lokale p50/p95-meting en POS read-back\r\n", "utf8");
-writeChecksums(browserTarget, ["node/node.exe", "app/server-bootstrap.cjs", "app/.next/BUILD_ID"]);
+const browserIntegrity = sealPackage(browserTarget);
 
 function syncSpeech(destination, includeStrongModel) {
   if (fs.existsSync(destination)) fs.rmSync(destination, { recursive: true, force: true });
@@ -106,23 +107,17 @@ function prepareLocalPackage(name, includeStrongModel) {
       : "Service Ears 3.5 licht lokaal\r\nVoorverwarmde Small Q5 + ruisadaptieve Silero VAD\r\nVoorlopige Review, race-veilige bewerkingen, versieerbaar herstel en bevestigde POS read-back\r\n",
     "utf8",
   );
-  const checksumFiles = [
-    "node/node.exe",
-    "app/server-bootstrap.cjs",
-    "app/.next/BUILD_ID",
-    "offline-speech/bin/whisper-cli.exe",
-    "offline-speech/bin/whisper-server.exe",
-    "offline-speech/models/ggml-small-q5_1.bin",
-    "offline-speech/models/ggml-silero-v6.2.0.bin",
-    "Start-Service-Ears-Lokaal.cmd",
-    "Start-Service-Ears-Lokaal.ps1",
-  ];
-  if (includeStrongModel) checksumFiles.push("offline-speech/models/ggml-large-v3-turbo-q5_0.bin");
-  writeChecksums(target, checksumFiles);
-  return target;
+  return { target, integrity: sealPackage(target) };
 }
 
-const adaptiveLocalTarget = prepareLocalPackage("Service-Ears-3.5-Lokaal-Adaptief", true);
-const lightLocalTarget = prepareLocalPackage("Service-Ears-3.5-Lokaal-Licht", false);
+const adaptiveLocal = prepareLocalPackage("Service-Ears-3.5-Lokaal-Adaptief", true);
+const lightLocal = prepareLocalPackage("Service-Ears-3.5-Lokaal-Licht", false);
 
-console.log(JSON.stringify({ browserTarget, adaptiveLocalTarget, lightLocalTarget }, null, 2));
+console.log(JSON.stringify({
+  browserTarget,
+  browserIntegrity,
+  adaptiveLocalTarget: adaptiveLocal.target,
+  adaptiveLocalIntegrity: adaptiveLocal.integrity,
+  lightLocalTarget: lightLocal.target,
+  lightLocalIntegrity: lightLocal.integrity,
+}, null, 2));

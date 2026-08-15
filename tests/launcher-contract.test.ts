@@ -44,12 +44,11 @@ describe("portable launcher contract", () => {
     expect(powershellLauncher).not.toContain("-ArgumentList @($serverEntry)");
   });
 
-  it("ships and checksums both launcher layers", () => {
+  it("ships both launcher layers and seals the complete package", () => {
     expect(packager).toContain('"Start-Service-Ears-Lokaal.cmd"');
     expect(packager).toContain('"Start-Service-Ears-Lokaal.ps1"');
-
-    const checksumList = packager.slice(packager.indexOf("const checksumFiles"));
-    expect(checksumList).toContain('"Start-Service-Ears-Lokaal.cmd"');
-    expect(checksumList).toContain('"Start-Service-Ears-Lokaal.ps1"');
+    expect(packager).toContain("writePackageChecksums(root)");
+    expect(packager).toContain("verifyPackageChecksums(root)");
+    expect(packager).not.toContain("const checksumFiles");
   });
 });
