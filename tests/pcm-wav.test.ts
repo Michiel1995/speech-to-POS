@@ -70,4 +70,28 @@ describe("offline PCM recording", () => {
     expect(prepared.samples).toHaveLength(noise.length);
     expect(prepared.speechDetected).toBe(false);
   });
+
+  it("does not mistake separated tableware impacts for a spoken order", () => {
+    const sampleRate = 16_000;
+    const input = new Float32Array(sampleRate * 2);
+    for (const start of [Math.round(sampleRate * 0.35), Math.round(sampleRate * 1.55)]) {
+      for (let offset = 0; offset < Math.round(sampleRate * 0.02); offset += 1) {
+        input[start + offset] = Math.sin(offset * 0.31) * 0.32;
+      }
+    }
+
+    const prepared = preparePcmForSpeech([input], sampleRate, 0.002);
+    expect(prepared.speechDetected).toBe(false);
+  });
+
+  it("keeps a short but continuous one-word order", () => {
+    const sampleRate = 16_000;
+    const input = new Float32Array(sampleRate);
+    for (let index = Math.round(sampleRate * 0.2); index < Math.round(sampleRate * 0.48); index += 1) {
+      input[index] = Math.sin(index * 0.087) * 0.065;
+    }
+
+    const prepared = preparePcmForSpeech([input], sampleRate, 0.002);
+    expect(prepared.speechDetected).toBe(true);
+  });
 });

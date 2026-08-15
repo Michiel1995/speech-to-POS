@@ -65,6 +65,8 @@ export interface PreparedSpeechPcm {
   trimmedDurationSeconds: number;
   noiseFloorRms: number;
   speechThresholdRms: number;
+  activeSpeechSeconds: number;
+  longestSpeechRunSeconds: number;
   speechDetected: boolean;
 }
 
@@ -123,6 +125,35 @@ function percentile(values: number[], fraction: number): number {
   return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * fraction)))];
 }
 
+interface SpeechFrameCluster {
+  start: number;
+  end: number;
+  activeCount: number;
+}
+
+function meaningfulSpeechClusters(frameLevels: number[], threshold: number): SpeechFrameCluster[] {
+  const clusters: SpeechFrameCluster[] = [];
+  let cluster: SpeechFrameCluster | undefined;
+  let lastActiveFrame = -Infinity;
+  for (let index = 0; index < frameLevels.length; index += 1) {
+    if (frameLevels[index] < threshold) continue;
+    // A single 20 ms dip is normal inside a word. A longer gap starts a new
+    // cluster so separated tableware impacts cannot add up to fake speech.
+    if (!cluster || index - lastActiveFrame > 2) {
+      cluster = { start: index, end: index, activeCount: 1 };
+      clusters.push(cluster);
+    } else {
+      cluster.end = index;
+      cluster.activeCount += 1;
+    }
+    lastActiveFrame = index;
+  }
+  // At least five active frames over a span of six frames: roughly 100 ms of
+  // voiced evidence within 120 ms. This preserves short words such as “ja” or
+  // “Duvel” while rejecting isolated knocks, glass taps and microphone pops.
+  return clusters.filter((candidate) => candidate.activeCount >= 5 && candidate.end - candidate.start + 1 >= 6);
+}
+
 /**
  * Prepares microphone PCM for speech recognition without storing audio:
  * removes low-frequency terminal/air-conditioning rumble, estimates the
@@ -164,19 +195,16 @@ export function preparePcmForSpeech(
     suppliedFloor > 0 ? Math.min(suppliedFloor, measuredFloor || suppliedFloor) : measuredFloor,
   ));
   const speechThresholdRms = Math.max(0.0065, noiseFloorRms + Math.max(0.003, noiseFloorRms * 0.2));
-  const activeFrames = frameLevels
-    .map((level, index) => level >= speechThresholdRms ? index : -1)
-    .filter((index) => index >= 0);
+  const speechClusters = meaningfulSpeechClusters(frameLevels, speechThresholdRms);
+  const speechDetected = speechClusters.length > 0;
 
   let firstSample = 0;
   let lastSample = filtered.length;
-  // Require multiple active frames so a single piece of tableware does not
-  // cut the recording down to a click.
-  if (activeFrames.length >= 3) {
+  if (speechDetected) {
     const preRoll = Math.round(TARGET_SAMPLE_RATE * 0.28);
     const postRoll = Math.round(TARGET_SAMPLE_RATE * 0.38);
-    firstSample = Math.max(0, activeFrames[0] * frameSize - preRoll);
-    lastSample = Math.min(filtered.length, (activeFrames.at(-1)! + 1) * frameSize + postRoll);
+    firstSample = Math.max(0, speechClusters[0].start * frameSize - preRoll);
+    lastSample = Math.min(filtered.length, (speechClusters.at(-1)!.end + 1) * frameSize + postRoll);
   }
   const trimmed = filtered.slice(firstSample, lastSample);
 
@@ -203,7 +231,9 @@ export function preparePcmForSpeech(
     trimmedDurationSeconds: Math.max(0, originalDurationSeconds - preparedDurationSeconds),
     noiseFloorRms,
     speechThresholdRms,
-    speechDetected: activeFrames.length >= 2,
+    activeSpeechSeconds: speechClusters.reduce((total, cluster) => total + cluster.activeCount * frameSize / TARGET_SAMPLE_RATE, 0),
+    longestSpeechRunSeconds: speechClusters.reduce((longest, cluster) => Math.max(longest, (cluster.end - cluster.start + 1) * frameSize / TARGET_SAMPLE_RATE), 0),
+    speechDetected,
   };
 }
 
