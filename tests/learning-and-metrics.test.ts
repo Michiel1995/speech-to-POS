@@ -1,10 +1,42 @@
 import { describe, expect, it } from "vitest";
 
 import { calculateQualityMetrics } from "@/src/analytics/quality-metrics";
+import { calculateRecognitionMetrics } from "@/src/analytics/recognition-metrics";
 import { CorrectionLearningStore } from "@/src/learning/correction-store";
 import { customer, interpret } from "@/tests/helpers";
+import { EMPTY_LANGUAGE_LEARNING, recordCorrection, recordExplicitCorrection } from "@/src/learning/local-language-learning";
 
 describe("correction learning", () => {
+  it("automatically approves three consistent local corrections without storing audio", () => {
+    const once = recordCorrection(EMPTY_LANGUAGE_LEARNING, "leven blond", "POS-1003");
+    const twice = recordCorrection(once, "leven blond", "POS-1003");
+    const threeTimes = recordCorrection(twice, "leven blond", "POS-1003");
+    expect(threeTimes.mappings).toMatchObject([{ evidenceCount: 3, status: "APPROVED" }]);
+  });
+
+  it("keeps conflicting corrections pending for human review", () => {
+    const first = recordCorrection(EMPTY_LANGUAGE_LEARNING, "leffe", "POS-1003");
+    const conflict = recordCorrection(first, "leffe", "POS-1004");
+    const repeated = recordCorrection(recordCorrection(conflict, "leffe", "POS-1004"), "leffe", "POS-1004");
+    expect(repeated.mappings.find((mapping) => mapping.productId === "POS-1004")?.status).toBe("PENDING");
+  });
+
+  it("learns an explicit waiter correction immediately when it has no conflict", () => {
+    const learned = recordExplicitCorrection(EMPTY_LANGUAGE_LEARNING, "kanaal kroketten", "POS-2001");
+    expect(learned.mappings).toMatchObject([{
+      spokenFragment: "kanaal kroketten",
+      productId: "POS-2001",
+      evidenceCount: 1,
+      status: "APPROVED",
+    }]);
+  });
+
+  it("keeps a conflicting explicit correction pending", () => {
+    const prior = recordExplicitCorrection(EMPTY_LANGUAGE_LEARNING, "leven", "POS-1003");
+    const conflict = recordExplicitCorrection(prior, "leven", "POS-1004");
+    expect(conflict.mappings.find((mapping) => mapping.productId === "POS-1004")?.status).toBe("PENDING");
+  });
+
   it("requires repeated evidence and manager approval", () => {
     const store = new CorrectionLearningStore(3);
     const base = {
@@ -56,5 +88,32 @@ describe("strict quality metrics", () => {
       actual,
     );
     expect(wrongCourse.strictLineAccuracy).toBe(0);
+  });
+
+  it("reports word errors separately from safety-critical product errors", () => {
+    const metrics = calculateRecognitionMetrics([
+      {
+        expectedText: "ik neem een Leffe Blond",
+        actualText: "ik neem een leven blond",
+        expectedProductIds: ["POS-1003"],
+        candidateProductIds: ["POS-1003"],
+        selectedProductIds: ["POS-1003"],
+        confidence: 0.82,
+        requiredConfirmation: true,
+      },
+      {
+        expectedText: "dat was een verhaal",
+        actualText: "dat was een verhaal",
+        expectedProductIds: [],
+        candidateProductIds: [],
+        selectedProductIds: [],
+        confidence: 0.94,
+        requiredConfirmation: false,
+      },
+    ]);
+    expect(metrics.wordErrorRate).toBeGreaterThan(0);
+    expect(metrics.productRecall).toBe(1);
+    expect(metrics.falseProductRate).toBe(0);
+    expect(metrics.confirmationRate).toBe(0.5);
   });
 });

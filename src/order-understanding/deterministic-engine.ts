@@ -12,15 +12,22 @@ import type {
   TenantMenu,
 } from "@/src/domain/schemas";
 import {
+  categoryHintsForSpokenText,
   findModifierMentions,
   findProductMentions,
   normalizeSpoken,
   productCandidatesForPhrase,
   type ModifierMention,
 } from "@/src/semantic-menu/matcher";
+import { productsForMenuQuestion } from "@/src/order-understanding/menu-question";
+import { normalizeFlemish } from "@/src/language/flemish-dialect";
+import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
+import { routeIntent } from "@/src/order-understanding/intent-router";
+import { isOrderableProduct, semanticProductAliases } from "@/src/semantic-menu/product-index";
 
 const NUMBER_WORDS: Record<string, number> = {
   een: 1,
+  eentje: 1,
   one: 1,
   un: 1,
   une: 1,
@@ -49,17 +56,54 @@ const NUMBER_WORDS: Record<string, number> = {
   tien: 10,
   ten: 10,
   dix: 10,
+  elf: 11,
+  eleven: 11,
+  onze: 11,
+  twaalf: 12,
+  twelve: 12,
+  douze: 12,
+  dozijn: 12,
+  dertien: 13,
+  thirteen: 13,
+  treize: 13,
+  veertien: 14,
+  fourteen: 14,
+  quatorze: 14,
+  vijftien: 15,
+  fifteen: 15,
+  quinze: 15,
+  zestien: 16,
+  sixteen: 16,
+  seize: 16,
+  zeventien: 17,
+  seventeen: 17,
+  dixsept: 17,
+  achttien: 18,
+  eighteen: 18,
+  dixhuit: 18,
+  negentien: 19,
+  nineteen: 19,
+  dixneuf: 19,
+  twintig: 20,
+  twenty: 20,
+  vingt: 20,
 };
 
 function parseNumberToken(token: string | undefined): number | undefined {
   if (!token) return undefined;
-  if (/^\d+$/.test(token)) return Number(token);
-  return NUMBER_WORDS[token];
+  const normalized = token.replace(/[^a-z0-9]/g, "");
+  if (/^\d+$/.test(normalized)) {
+    const quantity = Number(normalized);
+    return quantity > 0 && quantity <= 100 ? quantity : undefined;
+  }
+  return NUMBER_WORDS[normalized];
 }
 
 function quantityNearMention(text: string, start: number, end: number, correction: boolean): number {
   const normalized = normalizeSpoken(text);
   if (/voor ons allebei|for both of us|pour nous deux/.test(normalized)) return 2;
+  const groupMatch = normalized.match(/voor ons (\d{1,2})en\b/);
+  if (groupMatch) return Math.max(1, Math.min(100, Number(groupMatch[1])));
 
   if (correction) {
     const prefix = normalized.slice(Math.max(0, start - 40), start);
@@ -78,8 +122,11 @@ function quantityNearMention(text: string, start: number, end: number, correctio
 
 function isQuestion(text: string): boolean {
   const normalized = normalizeSpoken(text);
+  if (/\b(wil weten|willen weten|kan je zeggen|kun je zeggen|zeg eens welke|i want to know|je veux savoir)\b/.test(normalized)) {
+    return true;
+  }
   const orderCue = /\b(neem|nemen|wil|wilt|doe dan|bestel|pour moi|je prends|i'll have|i will have)\b/.test(normalized);
-  const questionCue = /^(hebben|welke|wat hebben|is er|do you have|which|what|avez vous|quels|est ce)/.test(normalized);
+  const questionCue = /^(hebben|heb je|hebben jullie|welke|wat|is er|zijn er|do you have|which|what|avez vous|quels|est ce)/.test(normalized);
   return questionCue && !orderCue;
 }
 
@@ -91,16 +138,185 @@ function isWaiterSuggestion(text: string): boolean {
   return /\b(ik zet|zal ik|doe ik|mag ik|i'll add|shall i add|je vous mets)\b/.test(normalizeSpoken(text));
 }
 
+function isWaiterConfirmation(text: string): boolean {
+  const normalized = normalizeSpoken(text);
+  return /^(?:dus|als ik het goed heb|u neemt|je neemt|jullie nemen|so you|donc)|\b(?:klopt dat|is dat juist|correct)\b/.test(normalized);
+}
+
 function isCorrection(text: string): boolean {
   return /\b(nee wacht|maak daar|maak die|verander|in plaats van|non attends|no wait|change)\b/.test(normalizeSpoken(text));
 }
 
 function isCancellation(text: string): boolean {
-  return /\b(laat .* vallen|annuleer|haal .* weg|cancel|remove|laisse tomber)\b/.test(normalizeSpoken(text));
+  const normalized = normalizeSpoken(text);
+  return [
+    /\bgeen\b/,
+    /\bhoef(?:t|ven)?\b.*\b(?:niet|geen)\b/,
+    /\blaat\b.*\b(?:zitten|vallen)\b/,
+    /\b(?:annuleer|schrap|verwijder|cancel|remove|supprime|annule)\b/,
+    /\bhaal\b.*\b(?:weg|eraf|er uit|uit de bestelling)\b/,
+    /\bdoe\b.*\b(?:toch\s+)?maar\s+niet\b/,
+    /\b(?:toch|maar)\s+niet\b/,
+    /\b(?:minder|niet meer)\b/,
+    /\b(?:don't need|do not need|leave .* out|laisse tomber)\b/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+function explicitRemovalQuantity(text: string, mentionStart: number, mentionAlias: string): number | undefined {
+  const normalized = normalizeSpoken(text);
+  const aliasQuantity = parseNumberToken(normalizeSpoken(mentionAlias).split(/\s+/)[0]);
+  if (aliasQuantity) return aliasQuantity;
+  const immediateToken = normalized
+    .slice(Math.max(0, mentionStart - 24), mentionStart)
+    .trim()
+    .split(/\s+/)
+    .at(-1);
+  return parseNumberToken(immediateToken);
+}
+
+function cancellationAppliesToMention(text: string, start: number, end: number, localStart: number): boolean {
+  const normalized = normalizeSpoken(text);
+  const localPrefix = normalized.slice(Math.max(0, localStart), start).trim();
+  const spokenMention = normalized.slice(start, end).trim();
+  const suffix = normalized.slice(end, Math.min(normalized.length, end + 55)).trim();
+  if (/^(?:geen|zonder)\b/.test(spokenMention)) return true;
+  if (/\b(?:geen|zonder)\s*$/.test(localPrefix)) return true;
+  if (
+    /\b(?:laat|haal|annuleer|schrap|verwijder|cancel|remove|supprime|annule)\b(?:(?!\b(?:voeg|neem|bestel)\b).)*$/.test(localPrefix)
+  ) return true;
+  if (
+    /^(?:(?:misschien|toch|maar|er|eruit|er uit)\s+)*(?:zitten|vallen|weg|eraf|er uit|niet|niet meer|minder)\b/.test(suffix)
+  ) return true;
+  return /\bhoef(?:t|ven)?\b.*\b(?:niet|geen)\b/.test(`${localPrefix} ${suffix}`);
+}
+
+function isContextualOrderReference(text: string): boolean {
+  const normalized = normalizeSpoken(text);
+  return (
+    /\b(?:geef|doe|neem|bestel|zet|wil|pak|breng)\b.*\b(?:die|dat|deze|daarvan)\b/.test(normalized) ||
+    /\b(?:die|dat|deze)\b.*\b(?:neem|wil|bestel)\b/.test(normalized) ||
+    /\b(?:doe maar|geef maar|neem maar|pak maar|breng maar|die maar|dat maar|deze maar|dees maar|den die|geef het maar|doe het maar|dat wordt het|dat is goed|die is goed|deze is goed|dat is prima|die is prima|dat mag|die mag|deze mag|ik ga daarvoor|ik kies die|ik kies dat|laat maar komen|voor mij ook|zelfde voor mij|eentje daarvan|iets daarvan|klinkt goed|klinkt lekker|klinkt prima|lijkt goed|lijkt lekker|ziet er goed uit)\b/.test(normalized) ||
+    /\b(?:ik|wij|we)\b.*\b(?:die|dat|deze|daarvoor)\b.*\b(?:neem|nemen|pak|pakken|probeer|proberen|kies|kiezen)\b/.test(normalized) ||
+    /\b(?:ik|wij|we)\b.*\b(?:neem|nemen|pak|pakken|probeer|proberen|kies|kiezen)\b.*\b(?:die|dat|deze|daarvoor)\b/.test(normalized) ||
+    /\b(?:dezelfde|hetzelfde|nog zo eentje|nog eentje|nog een keer|nog eens|de vorige nog eens)\b/.test(normalized) ||
+    /\b(?:i'll take that|i will take that|i want that|that one|this one|yes please|give me that|go with that|one of those|je prends celui|je prends celle|celui la|celle la|oui volontiers|ca me va)\b/.test(normalized) ||
+    /\b(?:i|we)\b.*\b(?:take|have|try|go with|choose)\b.*\b(?:that|this|it|one)\b/.test(normalized) ||
+    /\b(?:je|on|nous)\b.*\b(?:prends|prendre|prenons|choisis|choisir|vais|va)\b.*\b(?:ca|cela|celui|celle|le|la)\b/.test(normalized) ||
+    /\b(?:je|on|nous)\b.*\b(?:ca|cela|celui|celle|le|la)\b.*\b(?:prends|prendre|prenons|choisis|choisir)\b/.test(normalized) ||
+    /^(?:ja|jazeker|zeker|ok|oke|okay|yes|oui)(?:\s+(?:graag|please|volontiers))?$/.test(normalized) ||
+    /^(?:ja|ok|oke|okay)?\s*(?:die|dat|deze)(?:\s+(?:is\s+goed|maar|graag))?$/.test(normalized) ||
+    /^(?:de|het|nummer)?\s*(?:eerste|tweede|derde|laatste)(?:\s+(?:graag|maar|please))?$/.test(normalized) ||
+    /\b(?:eerste|tweede|derde|laatste|goedkoopste|duurste|alcoholvrije|blonde|bruine)\b.*\b(?:graag|neem|doe|geef)\b/.test(normalized)
+  );
+}
+
+function isSafeSoleContextSelection(text: string): boolean {
+  const normalized = normalizeSpoken(text);
+  if (!normalized || normalized.split(/\s+/).length > 14) return false;
+  if (/\?|\b(?:welke|wat|hoeveel|waarom|niet|geen|laat maar|twijfel|weet het niet|misschien toch niet|no|non|pas|don't|do not)\b/.test(normalized)) return false;
+  return isContextualOrderReference(normalized) ||
+    /\b(?:ja|jazeker|zeker|akkoord|graag|neem|nemen|doe|geef|pak|pakken|breng|kies|proberen|please|yes|okay|oke|ok|take|have|oui|volontiers|prends|prendre|donnez)\b/.test(normalized);
+}
+
+function contextualQuantity(text: string): number {
+  for (const token of normalizeSpoken(text).split(/\s+/)) {
+    const quantity = parseNumberToken(token);
+    if (quantity) return quantity;
+  }
+  return 1;
+}
+
+function contextualProductCandidates(text: string, products: MenuProduct[]): MenuProduct[] {
+  if (products.length <= 1) return products;
+  const normalized = normalizeSpoken(text);
+  if (/\b(?:eerste|nummer een)\b/.test(normalized)) return products.slice(0, 1);
+  if (/\b(?:tweede|nummer twee)\b/.test(normalized)) return products.slice(1, 2);
+  if (/\b(?:derde|nummer drie)\b/.test(normalized)) return products.slice(2, 3);
+  if (/\blaatste\b/.test(normalized)) return products.slice(-1);
+  if (/\bgoedkoopste\b/.test(normalized)) {
+    const lowestPrice = Math.min(...products.map((product) => product.priceCents));
+    return products.filter((product) => product.priceCents === lowestPrice);
+  }
+  if (/\bduurste\b/.test(normalized)) {
+    const highestPrice = Math.max(...products.map((product) => product.priceCents));
+    return products.filter((product) => product.priceCents === highestPrice);
+  }
+  if (/\b(?:alcoholvrij|alcoholvrije|zonder alcohol|zero|0\.0)\b/.test(normalized)) {
+    const alcoholFree = products.filter((product) =>
+      /alcohol free|0\.0/.test(normalizeSpoken(`${product.category} ${product.canonicalName} ${product.aliases.join(" ")}`)),
+    );
+    if (alcoholFree.length > 0) return alcoholFree;
+  }
+
+  const descriptorTokens = normalized
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && ![
+      "daarvan", "deze", "graag", "geef", "neem", "bestel", "voor", "maar", "doe", "klinkt", "lijkt", "goed", "lekker",
+    ].includes(token));
+  const scored = products.map((product) => {
+    const searchable = normalizeSpoken(
+      `${product.canonicalName} ${product.posName} ${product.category} ${product.aliases.join(" ")}`,
+    );
+    return {
+      product,
+      score: descriptorTokens.filter((token) => searchable.split(/\s+/).includes(token)).length,
+    };
+  });
+  const bestScore = Math.max(...scored.map(({ score }) => score));
+  return bestScore > 0 ? scored.filter(({ score }) => score === bestScore).map(({ product }) => product) : products;
+}
+
+function conversationSegments(text: string): string[] {
+  return text
+    .split(/\r?\n|[!?;]+|\.(?=\s|$)|,\s*(?=(?:maar\s+)?(?:voor mij|ik neem|ik wil|doe|geef|bestel|vandaag neem))|\bmaar\b(?=\s+(?:voor mij|ik neem|ik wil|doe|geef|bestel))/i)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
 }
 
 function looksLikeOrderWithoutMatch(text: string): boolean {
   return /\b(neem|nemen|wil|doe dan|voor mij|pour moi|je prends|i'll have|bestel)\b/.test(normalizeSpoken(text));
+}
+
+function hasOrderingContext(
+  text: string,
+  productMentions: ReturnType<typeof findProductMentions>,
+  modifierCount: number,
+): boolean {
+  const normalized = normalizeSpoken(text);
+  if (productMentions.length === 0) return false;
+  if (
+    /\b(geen|nooit|wil weten|willen weten|vraag stellen|is lekker|zijn lekker|smaakt|smaken|heet|heten|ik vind|wat vind|bedoel je|we hebben|jullie hebben|zij hebben|praat over|praten over|vertel over|grap|grapje|mop|verhaal|als voorbeeld|bij wijze van|droomde|gisteren|vroeger|niet mee|niet hier)\b/.test(normalized)
+  ) {
+    return false;
+  }
+  if (
+    /\b(neem|nemen|wil graag|wilt graag|bestel|voor mij|voor ons|doe er|doe dan|voeg|toevoegen|ik zet|zet erbij|mag ik|graag|nog een|nog eentje|nog ene|ook een|extra|please|pour moi|je prends|i'll have|i will have|is voor|zijn voor)\b/.test(normalized) ||
+    /\b(?:geef|breng|pak|zet|doe)\s+(?:me|mij|ons)\b/.test(normalized) ||
+    /\b(?:ik|wij|we)\s+(?:neem|nemen|wil|willen|pak|pakken|kies|kiezen)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  const quantityCue = /(?:\d+|een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|one|two|three|four|five|un|une|deux|trois|quatre|cinq)\s*$/;
+  if (productMentions.some((mention) => quantityCue.test(normalized.slice(Math.max(0, mention.start - 18), mention.start)))) {
+    return true;
+  }
+  if (
+    modifierCount > 0 &&
+    (productMentions.some((mention) => mention.start <= 4) || /^(?:\d+|een|un|une|one|twee|two|deux)\b/.test(normalized))
+  ) return true;
+
+  let residue = normalized;
+  for (const mention of [...productMentions].sort((left, right) => right.start - left.start)) {
+    residue = `${residue.slice(0, mention.start)} ${residue.slice(mention.end)}`;
+  }
+  residue = normalizeSpoken(residue)
+    .replace(/\b(een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|one|two|three|four|five|un|une|deux|trois|quatre|cinq|en|of|and|et|graag|aub|alstublieft|please)\b/g, "")
+    .replace(/\d+/g, "")
+    .replace(/[.']/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return residue.length === 0;
 }
 
 function issueCandidate(product: MenuProduct) {
@@ -144,23 +360,64 @@ function shouldTreatAsModifierOnly(
   return /\b(met|with|avec)\s*$/.test(prefix);
 }
 
-export function interpretDeterministically(request: InterpretRequest, menu: TenantMenu): DraftOrder {
+export function interpretDeterministically(
+  request: InterpretRequest,
+  menu: TenantMenu,
+  options: { ignoreTurns?: boolean } = {},
+): DraftOrder {
   const started = performance.now();
   const now = new Date().toISOString();
   const lines: DraftLine[] = request.priorLines ? request.priorLines.map((line) => ({ ...line })) : [];
   const issues: DraftIssue[] = [];
   const warnings: DraftWarning[] = [];
-  let sequence = 0;
+  let sequence = Math.max(0, ...lines.map((line) => Number(line.lineId.match(/-(\d+)$/)?.[1] ?? 0)));
   let pendingWaiterSuggestion: ConversationTurn | undefined;
+  let recentOfferedProducts = (request.contextProductIds ?? [])
+    .map((productId) => menu.products.find((product) => isOrderableProduct(product) && product.id === productId))
+    .filter((product): product is MenuProduct => Boolean(product));
 
   const nextId = (prefix: string) => `${prefix}-${++sequence}`;
 
-  const removeMatchingProduct = (phrase: string) => {
-    const candidates = productCandidatesForPhrase(phrase, menu);
-    for (const candidate of candidates) {
-      const index = lines.findIndex((line) => line.productId === candidate.id);
-      if (index >= 0) lines.splice(index, 1);
+  const removeCandidateProducts = (
+    candidates: MenuProduct[],
+    rawText: string,
+    quantity?: number,
+    confidence = 1,
+  ) => {
+    const existingCandidates = [...new Map(
+      candidates
+        .filter((candidate) => lines.some((line) => line.productId === candidate.id))
+        .map((candidate) => [candidate.id, candidate]),
+    ).values()];
+    if (existingCandidates.length > 1) {
+      issues.push({
+        id: nextId("issue"),
+        type: "ambiguous_removal",
+        blocking: true,
+        message: `Welke ${rawText} wil je uit de bestelling verwijderen?`,
+        rawText,
+        productCandidates: existingCandidates.slice(0, 5).map(issueCandidate),
+      });
+      return false;
     }
+    const product = existingCandidates[0];
+    if (!product) return false;
+    const index = lines.findIndex((line) => line.productId === product.id);
+    const line = lines[index];
+    if (quantity && quantity < line.quantity) line.quantity -= quantity;
+    else lines.splice(index, 1);
+    if (confidence < 1) {
+      warnings.push({
+        id: nextId("warning"),
+        type: "free_text_note",
+        message: `Controleer verwijdering: “${rawText}” werd geïnterpreteerd als ${product.canonicalName}.`,
+      });
+    }
+    return true;
+  };
+
+  const removeMatchingProduct = (phrase: string) => {
+    removeCandidateProducts(productCandidatesForPhrase(phrase, menu), phrase);
   };
 
   const addOrUpdateLine = (
@@ -169,6 +426,7 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
     modifiers: SelectedModifier[],
     correction: boolean,
     notes: string[] = [],
+    confidence = 0.94,
   ) => {
     const existing = lines.find((line) => line.productId === product.id);
     if (existing) {
@@ -178,6 +436,7 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
         existing.modifiers.push(modifier);
       }
       existing.notes.push(...notes.filter((note) => !existing.notes.includes(note)));
+      existing.confidence = Math.min(existing.confidence, confidence);
       return existing;
     }
     const line: DraftLine = {
@@ -191,16 +450,77 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
       course: product.defaultCourse,
       modifiers,
       notes,
-      confidence: 0.94,
+      confidence,
     };
     lines.push(line);
     return line;
   };
 
-  const processCustomerText = (text: string) => {
-    if (isQuestion(text)) return;
+  const processCustomerText = (spokenText: string) => {
+    const text = normalizeFlemish(spokenText, request.dialectProfile);
+    const matchOptions = {
+      preferredProductIds: recentOfferedProducts.map((product) => product.id),
+      existingProductIds: lines.map((line) => line.productId),
+      categoryHints: categoryHintsForSpokenText(text),
+    };
+    const spokenProductMentions = findProductMentions(text, menu, matchOptions);
+    const normalizedExplicitText = ` ${normalizeSpoken(text)} `;
+    const hasReliableExplicitProduct = spokenProductMentions.some((mention) =>
+      mention.candidateScores.some((candidate) =>
+        candidate.evidence.includes("exact-alias") && candidate.acousticScore >= 0.9,
+      ) || mention.candidates.some((product) => semanticProductAliases(product)
+        .some((alias) => normalizedExplicitText.includes(` ${normalizeSpoken(alias)} `))),
+    );
+    const contextualWithoutProduct = !hasReliableExplicitProduct && (
+      isContextualOrderReference(text) ||
+      (recentOfferedProducts.length === 1 && isSafeSoleContextSelection(text))
+    );
+    const segments = contextualWithoutProduct ? [spokenText] : conversationSegments(spokenText);
+    if (segments.length > 1) {
+      for (const segment of segments) processCustomerText(segment);
+      return;
+    }
+    const routed = routeIntent(text, {
+      menu,
+      dialectProfile: request.dialectProfile,
+      hasOrder: lines.length > 0,
+      hasContext: recentOfferedProducts.length > 0,
+      contextProductIds: matchOptions.preferredProductIds,
+      existingProductIds: matchOptions.existingProductIds,
+    });
+    if (["menu_question", "availability_question", "price_question", "ingredient_question", "recommendation_question"].includes(routed.intent) || isQuestion(text)) {
+      const questionProducts = productsForMenuQuestion(text, menu);
+      if (questionProducts.length > 0) recentOfferedProducts = questionProducts.slice(0, 12);
+      return;
+    }
+    if (routed.intent === "non_order") return;
     const normalized = normalizeSpoken(text);
     const correction = isCorrection(text);
+
+    const absoluteQuantityMatch = normalized.match(/\b(?:maak|doe|zet)\s+(?:er|het|die|dat)\s+(\w+)\s+(?:van|in totaal)\b/);
+    const incrementQuantityMatch = normalized.match(/\b(?:doe|zet|tel)?\s*(?:er\s+)?nog\s+(\w+)\s+(?:bij|extra)?\b/);
+    const decrementQuantityMatch = normalized.match(/\b(\w+)\s+minder\b/);
+    const quantityOnly = parseNumberToken(absoluteQuantityMatch?.[1] ?? incrementQuantityMatch?.[1] ?? decrementQuantityMatch?.[1]);
+    if (quantityOnly && findProductMentions(text, menu, matchOptions).length === 0 && (absoluteQuantityMatch || incrementQuantityMatch || decrementQuantityMatch)) {
+      if (lines.length === 1) {
+        if (absoluteQuantityMatch) lines[0].quantity = quantityOnly;
+        else if (incrementQuantityMatch) lines[0].quantity += quantityOnly;
+        else lines[0].quantity = Math.max(1, lines[0].quantity - quantityOnly);
+      } else if (lines.length > 1) {
+        const existingProducts = lines
+          .map((line) => menu.products.find((product) => product.id === line.productId))
+          .filter((product): product is MenuProduct => Boolean(product));
+        issues.push({
+          id: nextId("issue"),
+          type: "ambiguous_product",
+          blocking: true,
+          message: "Voor welk product wil je de hoeveelheid aanpassen?",
+          rawText: text,
+          productCandidates: existingProducts.slice(0, 5).map(issueCandidate),
+        });
+      }
+      return;
+    }
 
     const replaceMatch = normalized.match(/(?:verander|change) (?:die|de|the)?\s*(.+?) (?:naar|in|to) (.+)$/);
     if (replaceMatch) {
@@ -208,10 +528,94 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
       processCustomerText(replaceMatch[2]);
       return;
     }
+    const inPlaceMatch = normalized.match(/(?:doe|neem|geef|zet)?(?:\s+toch)?(?:\s+maar)?\s*(.+?)\s+in plaats van\s+(.+)$/);
+    if (inPlaceMatch) {
+      removeMatchingProduct(inPlaceMatch[2]);
+      processCustomerText(inPlaceMatch[1]);
+      return;
+    }
 
     if (isCancellation(text)) {
-      const cancelMatch = normalized.match(/(?:laat|annuleer|haal|cancel|remove|laisse)\s+(?:die|de|the)?\s*(.+?)(?:\s+toch)?\s*(?:maar)?\s*(?:vallen|weg|$)/);
-      if (cancelMatch) removeMatchingProduct(cancelMatch[1]);
+      if (/\b(?:annuleer|schrap|verwijder|cancel|remove)\s+(?:de hele bestelling|alles)\b|\bhaal\s+alles\s+weg\b|\blaat\s+alles\s+maar\s+zitten\b/.test(normalized)) {
+        lines.splice(0, lines.length);
+        return;
+      }
+
+      const cancellationMentions = findProductMentions(text, menu, matchOptions);
+      if (cancellationMentions.length === 0) {
+        if (/\b(?:vorige|laatste)\b/.test(normalized) && lines.length > 0) {
+          const latestLine = lines.at(-1)!;
+          const latestProduct = menu.products.find((product) => product.id === latestLine.productId);
+          if (latestProduct) removeCandidateProducts([latestProduct], "de vorige");
+          return;
+        }
+        if (/\b(?:laat|haal|annuleer|schrap|verwijder)\s+(?:dat|die|deze)\b/.test(normalized)) {
+          const existingProducts = lines
+            .map((line) => menu.products.find((product) => product.id === line.productId))
+            .filter((product): product is MenuProduct => Boolean(product));
+          if (existingProducts.length === 1) removeCandidateProducts(existingProducts, "dat");
+          else if (existingProducts.length > 1) {
+            issues.push({
+              id: nextId("issue"),
+              type: "ambiguous_removal",
+              blocking: true,
+              message: "Welk product wil je uit de bestelling verwijderen?",
+              rawText: text,
+              productCandidates: existingProducts.slice(0, 5).map(issueCandidate),
+            });
+          }
+        }
+        return;
+      }
+
+      let previousMentionEnd = 0;
+      for (const mention of cancellationMentions) {
+        const applies = cancellationMentions.length === 1 || cancellationAppliesToMention(
+          text,
+          mention.start,
+          mention.end,
+          previousMentionEnd,
+        );
+        previousMentionEnd = mention.end;
+        if (!applies) continue;
+        removeCandidateProducts(
+          mention.candidates,
+          mention.alias,
+          explicitRemovalQuantity(text, mention.start, mention.alias),
+          mention.confidence,
+        );
+      }
+      return;
+    }
+
+    if (contextualWithoutProduct) {
+      const repeatsPrevious = /\b(?:dezelfde|hetzelfde|nog zo eentje|nog eentje|nog een keer|nog eens|de vorige nog eens)\b/.test(normalized);
+      const previousProduct = repeatsPrevious
+        ? menu.products.find((product) => product.id === lines.at(-1)?.productId)
+        : undefined;
+      const contextPool = previousProduct ? [previousProduct] : recentOfferedProducts;
+      const contextualCandidates = contextualProductCandidates(text, contextPool);
+      if (contextualCandidates.length === 1) {
+        addOrUpdateLine(contextualCandidates[0], contextualQuantity(text), [], false);
+        recentOfferedProducts = [];
+      } else if (contextualCandidates.length > 1) {
+        issues.push({
+          id: nextId("issue"),
+          type: "ambiguous_product",
+          blocking: true,
+          message: "Naar welk aangeboden product verwijst ‘die’?",
+          rawText: text,
+          productCandidates: contextualCandidates.slice(0, 5).map(issueCandidate),
+        });
+      } else {
+        issues.push({
+          id: nextId("issue"),
+          type: "unresolved_product",
+          blocking: true,
+          message: "Ik weet niet naar welk product ‘die’ verwijst. Noem het product nog eens.",
+          rawText: text,
+        });
+      }
       return;
     }
 
@@ -237,8 +641,9 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
       return;
     }
 
-    const productMentions = findProductMentions(text, menu);
+    const productMentions = findProductMentions(text, menu, matchOptions);
     const modifierMentions = findModifierMentions(text, menu.modifierGroups);
+    if (productMentions.length > 0 && !hasOrderingContext(text, productMentions, modifierMentions.length)) return;
     const earlierProducts: MenuProduct[] = [];
     let latestLine: DraftLine | undefined;
     let processedProductCount = 0;
@@ -267,6 +672,11 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
           blocking: true,
           message: `“${mention.alias}” matches more than one active POS product.`,
           rawText: mention.alias,
+          matchConfidence: mention.confidence,
+          matchMargin: mention.margin,
+          matchEvidence: mention.candidateScores.flatMap((candidate) => candidate.evidence)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .slice(0, 10),
           productCandidates: filteredCandidates.slice(0, 5).map(issueCandidate),
         });
         continue;
@@ -281,7 +691,32 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
       const uniqueModifiers = [...new Map(compatibleModifiers.map((modifier) => [modifier.optionId, modifier])).values()];
       const quantity = quantityNearMention(text, mention.start, mention.end, correction);
       const notes = /apart|on the side|a part/.test(normalized) ? ["Serve specified sauce/side separately"] : [];
-      latestLine = addOrUpdateLine(product, quantity, uniqueModifiers, correction, notes);
+      const confidence = mention.confidence >= 1 ? 0.96 : Math.min(0.9, mention.confidence);
+      latestLine = addOrUpdateLine(product, quantity, uniqueModifiers, correction, notes, confidence);
+      if (mention.requiresConfirmation) {
+        if (request.source === "audio") {
+          issues.push({
+            id: nextId("issue"),
+            type: "speech_confirmation",
+            blocking: true,
+            message: `Bedoelde je ${product.canonicalName} toen je “${mention.alias}” zei?`,
+            rawText: mention.alias,
+            lineId: latestLine.lineId,
+            quantityDelta: quantity,
+            matchConfidence: mention.candidateScores[0]?.acousticScore ?? mention.confidence,
+            matchMargin: mention.margin,
+            matchEvidence: mention.candidateScores[0]?.evidence,
+            productCandidates: [issueCandidate(product)],
+          });
+        } else {
+          warnings.push({
+            id: nextId("warning"),
+            type: "free_text_note",
+            message: `Controleer spraakmatch: “${mention.alias}” werd geïnterpreteerd als ${product.canonicalName}.`,
+            lineId: latestLine.lineId,
+          });
+        }
+      }
 
       if (
         product.defaultCourse === "starter" &&
@@ -314,12 +749,14 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
 
     if (processedProductCount === 0 && modifierMentions.length === 0 && looksLikeOrderWithoutMatch(text)) {
       const rawText = unresolvedPhrase(text) || text;
+      const culinaryAdvice = culinaryAdviceForText(text, menu);
       issues.push({
         id: nextId("issue"),
         type: "unresolved_product",
         blocking: true,
-        message: `No active POS product matches “${rawText}”.`,
-        rawText,
+        message: culinaryAdvice?.message ?? `No active POS product matches “${rawText}”.`,
+        rawText: culinaryAdvice?.requested.names.nl ?? rawText,
+        productCandidates: culinaryAdvice?.alternatives.map(issueCandidate),
       });
     }
 
@@ -333,8 +770,14 @@ export function interpretDeterministically(request: InterpretRequest, menu: Tena
     }
   };
 
-  for (const turn of request.turns) {
+  for (const turn of options.ignoreTurns ? [] : request.turns) {
     if (turn.speaker === "waiter") {
+      const offeredProducts = findProductMentions(turn.text, menu)
+        .flatMap((mention) => mention.candidates)
+        .filter((product, index, products) => products.findIndex((candidate) => candidate.id === product.id) === index);
+      if (offeredProducts.length > 0 && !isWaiterConfirmation(turn.text)) {
+        recentOfferedProducts = offeredProducts.slice(0, 12);
+      }
       pendingWaiterSuggestion = isWaiterSuggestion(turn.text) ? turn : undefined;
       continue;
     }

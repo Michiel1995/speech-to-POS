@@ -1,8 +1,8 @@
 import { demoMenu } from "@/src/data/demo-menu";
-import { InterpretRequestSchema, type ConversationTurn } from "@/src/domain/schemas";
+import { InterpretRequestSchema, type ConversationTurn, type DraftLine } from "@/src/domain/schemas";
 import { interpretDeterministically } from "@/src/order-understanding/deterministic-engine";
 
-export function interpret(turns: ConversationTurn[]) {
+export function interpret(turns: ConversationTurn[], priorLines?: DraftLine[], contextProductIds?: string[]) {
   const request = InterpretRequestSchema.parse({
     tenantId: demoMenu.tenantId,
     tableId: "TABLE-12",
@@ -11,6 +11,8 @@ export function interpret(turns: ConversationTurn[]) {
     source: "text",
     engine: "deterministic",
     turns,
+    priorLines,
+    contextProductIds,
   });
   return interpretDeterministically(request, demoMenu);
 }

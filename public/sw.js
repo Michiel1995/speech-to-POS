@@ -1,4 +1,4 @@
-const CACHE = "service-ears-shell-v1";
+const CACHE = "service-ears-shell-v3-4-elegant-1";
 const SHELL = ["/", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {

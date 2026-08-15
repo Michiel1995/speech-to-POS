@@ -43,6 +43,15 @@ export const MenuProductSchema = z.object({
   defaultCourse: CourseSchema,
   priceCents: z.number().int().nonnegative(),
   active: z.boolean(),
+  availability: z.enum(["available", "out_of_stock", "seasonal_unavailable"]).optional(),
+  brand: z.string().optional(),
+  productType: z.string().optional(),
+  variant: z.string().optional(),
+  sizeLabel: z.string().optional(),
+  volumeMl: z.number().int().positive().optional(),
+  regionalAliases: z.array(z.string().min(1)).optional(),
+  phoneticAliases: z.array(z.string().min(1)).optional(),
+  seasonLabel: z.string().optional(),
   aliases: z.array(z.string().min(1)).min(1),
   modifierGroupIds: z.array(z.string()),
   allergenCodes: z.array(z.string()),
@@ -103,11 +112,15 @@ export type ResolutionCandidate = z.infer<typeof ResolutionCandidateSchema>;
 
 export const DraftIssueSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(["ambiguous_product", "unresolved_product", "missing_modifier", "course_exception"]),
+  type: z.enum(["ambiguous_product", "ambiguous_removal", "unresolved_product", "speech_confirmation", "missing_modifier", "course_exception"]),
   blocking: z.boolean(),
   message: z.string().min(1),
   rawText: z.string().optional(),
   lineId: z.string().optional(),
+  quantityDelta: z.number().int().positive().optional(),
+  matchConfidence: z.number().min(0).max(1).optional(),
+  matchMargin: z.number().min(0).max(1).optional(),
+  matchEvidence: z.array(z.string().min(1)).max(10).optional(),
   productCandidates: z.array(ResolutionCandidateSchema).max(5).optional(),
   modifierGroupId: z.string().optional(),
   modifierOptions: z.array(ModifierOptionSchema).max(10).optional(),
@@ -165,14 +178,24 @@ export const PriorOrderLineSchema = DraftLineSchema.pick({
 });
 
 export const InterpretRequestSchema = z.object({
+  operationId: z.string().min(1).max(100).optional(),
+  baseDraftRevision: z.string().min(1).max(2_000).optional(),
   tenantId: z.string().default("tenant-demo-brussels"),
   tableId: z.string().min(1),
   tableLabel: z.string().min(1),
   waiterId: z.string().min(1).default("waiter-demo"),
   source: z.enum(["text", "audio", "manual"]).default("text"),
-  engine: z.enum(["deterministic", "openai"]).default("deterministic"),
+  engine: z.literal("deterministic").default("deterministic"),
   turns: z.array(ConversationTurnSchema).min(1).max(100),
   priorLines: z.array(PriorOrderLineSchema).max(50).optional(),
+  contextProductIds: z.array(z.string().min(1)).max(12).optional(),
+  dialectProfile: z.enum(["auto", "standard", "west_flemish", "east_flemish", "antwerp", "brabant", "limburg"]).default("auto"),
+  utteranceId: z.string().min(1).max(100).optional(),
+  processedUtteranceIds: z.array(z.string().min(1).max(100)).max(100).optional(),
+  approvedAliases: z.array(z.object({
+    spokenFragment: z.string().trim().min(2).max(100),
+    productId: z.string().min(1),
+  })).max(200).optional(),
 });
 export type InterpretRequest = z.infer<typeof InterpretRequestSchema>;
 

@@ -14,12 +14,21 @@ changes, historical references, composite items, noise, and person/shared contex
   gaps. They are intentionally not counted as passing without real provider results.
 - Unit tests separately cover validation, idempotency, correction-learning thresholds,
   strict accuracy calculation, and speaker-role conservatism.
+- `word-recognition-v3.test.ts` adds targeted noisy product forms, five-alternative
+  ASR ranking, hard-negative stories and a generated **1,000-case phonetic mutation
+  bank**. This is a repeatable regression bank, not a substitute for real recordings.
+- `culinary-knowledge.test.ts` executes **600 spread multilingual request cases** plus
+  safety cases for out-of-menu recognition, alternative guidance, active seasonal
+  dishes, stories, and menu-hallucination resistance. The backing seed document
+  expands to over 1,000 acoustic aliases and over 3,000 request forms.
 
 ## Pilot metric
 
 A line is strictly correct only when product, quantity, modifier set, course, and
 operational notes all match. `calculateQualityMetrics` also reports product, quantity,
-and modifier accuracy separately. Target `>=97%` applies to a representative labelled
+and modifier accuracy separately. `calculateRecognitionMetrics` reports word error
+rate, product recall/precision, candidate coverage, false-product rate, confirmation
+rate and high-confidence errors. Target `>=97%` applies to a representative labelled
 pilot set—not the deterministic rules-only subset.
 
 Also capture corrections/order, false uncertainty, latency, POS submission success,

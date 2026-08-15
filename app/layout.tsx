@@ -4,19 +4,19 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Service Ears — Voice to POS",
-  description: "AI prepares. Waiter confirms. POS executes.",
+  description: "AI bereidt voor. De ober bevestigt. Het POS-systeem voert uit.",
   applicationName: "Service Ears",
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#102923",
+  themeColor: "#0b2b24",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="nl">
       <body>{children}</body>
     </html>
   );

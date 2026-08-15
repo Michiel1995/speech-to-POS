@@ -26,20 +26,20 @@ Browser microphone / text / future wearable
 ## Module boundaries
 
 - `src/audio`: hardware-neutral capture contracts.
-- `src/speech` and `src/speaker`: OpenAI transcription and conservative role
-  inference.
-- `src/order-understanding`: deterministic and OpenAI-backed conversation engines.
+- `src/speech` and `src/speaker`: bundled whisper.cpp transcription, adaptive model
+  selection/load control and conservative linguistic role inference.
+- `src/order-understanding`: deterministic multilingual conversation engine.
 - `src/semantic-menu`: normalized aliases and unbiased candidate matching.
 - `src/validation`: final source-of-truth checks.
 - `src/pos`: adapter contract, mock implementation, and Lightspeed implementation.
 - `src/learning`: anonymized correction signals and manager-approved proposals.
 - `src/analytics`: strict product-quality metrics.
-- `app`: server-only API keys plus the mobile companion.
+- `app`: local API routes plus the desktop companion.
 
 ## Trust boundaries
 
-Provider audio/transcript results are untrusted input. OpenAI output is parsed into a
-Zod schema and then remapped to the current menu. The POS adapter validates again.
+Local transcript results are untrusted input. They are parsed into a Zod schema and
+then remapped to the current menu. The POS adapter validates again.
 Prices, product IDs, modifier IDs, active status, and allowed combinations never come
 from model prose.
 
@@ -56,3 +56,9 @@ changing the order engine.
 The idempotency key is stable per draft. A failed send becomes ERROR and never loops.
 Reconnection never submits automatically. The service worker and local menu/draft
 cache keep the already-loaded manual fallback available.
+
+The local model file is not part of the order engine contract. Deployments can add or
+remove compatible whisper.cpp `.bin` model packs without rebuilding the app. The
+runtime discovers them, selects the highest quality eligible tier, watches latency and
+failures, and falls back. This keeps one application build usable across mixed laptop
+fleets.

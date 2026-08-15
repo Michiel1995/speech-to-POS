@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Block private or generated files
+        run: node scripts/repository-safety.mjs
       - uses: pnpm/action-setup@v4
         with:
           version: 11.16.0

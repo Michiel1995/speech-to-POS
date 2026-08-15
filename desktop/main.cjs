@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, safeStorage, session, shell } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, session, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -6,52 +6,35 @@ const net = require("node:net");
 const path = require("node:path");
 
 const APP_ORIGIN_HOST = "127.0.0.1";
-const SETTINGS_FILE = "desktop-settings.json";
-const START_TIMEOUT_MS = 45_000;
+const START_TIMEOUT_MS = 120_000;
 
 let mainWindow;
 let serverProcess;
 let serverLog;
 let appUrl;
 
-function settingsPath() {
-  return path.join(app.getPath("userData"), SETTINGS_FILE);
-}
-
-function readStoredKey() {
-  try {
-    const stored = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
-    if (!stored.encryptedOpenAIKey || !safeStorage.isEncryptionAvailable()) return "";
-    return safeStorage.decryptString(Buffer.from(stored.encryptedOpenAIKey, "base64"));
-  } catch {
-    return "";
-  }
-}
-
-function writeStoredKey(key) {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error("Windows-versleuteling is niet beschikbaar op dit apparaat.");
-  }
-  fs.mkdirSync(app.getPath("userData"), { recursive: true });
-  const payload = {
-    encryptedOpenAIKey: safeStorage.encryptString(key).toString("base64"),
+function offlineSpeechPaths() {
+  const root = app.isPackaged
+    ? path.join(process.resourcesPath, "offline-speech")
+    : path.join(app.getAppPath(), "offline-speech");
+  return {
+    cli: path.join(root, "bin", "whisper-cli.exe"),
+    server: path.join(root, "bin", "whisper-server.exe"),
+    modelDirectory: path.join(root, "models"),
+    model: path.join(root, "models", "ggml-small-q5_1.bin"),
+    vadModel: path.join(root, "models", "ggml-silero-v6.2.0.bin"),
   };
-  fs.writeFileSync(settingsPath(), `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-}
-
-function clearStoredKey() {
-  try {
-    fs.rmSync(settingsPath(), { force: true });
-  } catch {
-    // A missing settings file already means the key is cleared.
-  }
 }
 
 function desktopStatus() {
+  const speech = offlineSpeechPaths();
+  const strongModelAvailable = fs.existsSync(path.join(speech.modelDirectory, "ggml-large-v3-turbo-q5_0.bin"));
   return {
     appVersion: app.getVersion(),
-    openaiConfigured: Boolean(readStoredKey() || process.env.OPENAI_API_KEY),
-    encryptedStorageAvailable: safeStorage.isEncryptionAvailable(),
+    offlineSpeechAvailable: fs.existsSync(speech.cli) && fs.existsSync(speech.model) && fs.existsSync(speech.vadModel),
+    speechModel: strongModelAvailable
+      ? "Adaptief: Whisper Large-v3 Turbo Q5 met Small-reserve"
+      : "Adaptief: Whisper Small Q5; sterker modelpack optioneel",
   };
 }
 
@@ -72,6 +55,9 @@ function waitForHealth(url) {
   const deadline = Date.now() + START_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const poll = () => {
+      if (serverProcess && serverProcess.exitCode !== null) {
+        return reject(new Error(`De lokale appserver stopte tijdens het starten met code ${serverProcess.exitCode}.`));
+      }
       const request = http.get(`${url}/api/health`, (response) => {
         response.resume();
         if (response.statusCode === 200) return resolve();
@@ -80,6 +66,9 @@ function waitForHealth(url) {
       });
       request.setTimeout(1_500, () => request.destroy());
       request.on("error", () => {
+        if (serverProcess && serverProcess.exitCode !== null) {
+          return reject(new Error(`De lokale appserver stopte tijdens het starten met code ${serverProcess.exitCode}.`));
+        }
         if (Date.now() >= deadline) return reject(new Error("De lokale appserver startte niet op tijd."));
         setTimeout(poll, 250);
       });
@@ -101,7 +90,7 @@ async function startServer() {
   const runtimeRoot = app.isPackaged
     ? path.join(process.resourcesPath, "app")
     : path.join(app.getAppPath(), ".next", "standalone");
-  const serverEntry = path.join(runtimeRoot, "server.js");
+  const serverEntry = path.join(runtimeRoot, "server-bootstrap.cjs");
   if (!fs.existsSync(serverEntry)) {
     throw new Error("De desktopruntime ontbreekt. Bouw de Next.js-app eerst.");
   }
@@ -109,8 +98,11 @@ async function startServer() {
   const logPath = path.join(app.getPath("logs"), "service-ears-server.log");
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   serverLog = fs.createWriteStream(logPath, { flags: "a" });
-  const openaiKey = readStoredKey() || process.env.OPENAI_API_KEY || "";
-  const runtimeModules = path.join(runtimeRoot, app.isPackaged ? "runtime_modules" : "node_modules");
+  const speech = offlineSpeechPaths();
+  if (!fs.existsSync(speech.cli) || !fs.existsSync(speech.model) || !fs.existsSync(speech.vadModel)) {
+    throw new Error("De lokale spraakmodule ontbreekt. Installeer Service Ears opnieuw.");
+  }
+  const runtimeModules = path.join(runtimeRoot, "runtime_modules");
   const env = {
     ...process.env,
     ELECTRON_RUN_AS_NODE: "1",
@@ -118,13 +110,20 @@ async function startServer() {
     PORT: String(port),
     NODE_PATH: [runtimeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
     POS_ADAPTER: "mock",
-    ORDER_ENGINE_MODE: openaiKey ? "openai" : "deterministic",
-    OPENAI_ORDER_MODEL: process.env.OPENAI_ORDER_MODEL || "gpt-5.4-mini",
-    OPENAI_TRANSCRIPTION_MODEL: process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe-diarize",
+    ORDER_ENGINE_MODE: "deterministic",
+    LOCAL_WHISPER_CLI: speech.cli,
+    LOCAL_WHISPER_SERVER: fs.existsSync(speech.server) ? speech.server : "",
+    LOCAL_WHISPER_MODEL: speech.model,
+    LOCAL_WHISPER_MODELS_DIRS: speech.modelDirectory,
+    LOCAL_WHISPER_VAD_MODEL: speech.vadModel,
+    LOCAL_WHISPER_MODEL_POLICY: process.env.LOCAL_WHISPER_MODEL_POLICY || "adaptive",
+    LOCAL_WHISPER_MAX_THREADS: process.env.LOCAL_WHISPER_MAX_THREADS || "6",
+    LOCAL_WHISPER_TARGET_LATENCY_MS: process.env.LOCAL_WHISPER_TARGET_LATENCY_MS || "30000",
+    LOCAL_WHISPER_IDLE_UNLOAD_MS: process.env.LOCAL_WHISPER_IDLE_UNLOAD_MS || "180000",
+    LOCAL_WHISPER_BACKEND: process.env.LOCAL_WHISPER_BACKEND || "CPU/BLAS",
     DEBUG_RETAIN_CONVERSATION: "false",
   };
-  if (openaiKey) env.OPENAI_API_KEY = openaiKey;
-  else delete env.OPENAI_API_KEY;
+  delete env.OPENAI_API_KEY;
 
   serverProcess = spawn(process.execPath, [serverEntry], {
     cwd: runtimeRoot,
@@ -145,27 +144,8 @@ async function startServer() {
   return appUrl;
 }
 
-async function restartServer() {
-  const url = await startServer();
-  if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadURL(url);
-}
-
 function registerIpc() {
   ipcMain.handle("desktop:get-status", () => desktopStatus());
-  ipcMain.handle("desktop:save-openai-key", async (_event, value) => {
-    const key = typeof value === "string" ? value.trim() : "";
-    if (!key || key.length > 512 || /\s/.test(key)) {
-      throw new Error("Voer een geldige OpenAI API-sleutel zonder spaties in.");
-    }
-    writeStoredKey(key);
-    await restartServer();
-    return desktopStatus();
-  });
-  ipcMain.handle("desktop:clear-openai-key", async () => {
-    clearStoredKey();
-    await restartServer();
-    return desktopStatus();
-  });
 }
 
 function createWindow() {

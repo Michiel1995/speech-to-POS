@@ -1,0 +1,70 @@
+SERVICE EARS 3.5 — GEZONDHEIDSGECONTROLEERDE LOKALE TESTVERSIE
+================================================
+
+STARTEN
+1. Laat alle bestanden samen in deze map staan.
+2. Dubbelklik op Start-Service-Ears-Lokaal.cmd.
+3. De verborgen server wordt eerst gecontroleerd; pas daarna opent Microsoft Edge op http://127.0.0.1:3211/.
+4. Klik op Start dienst en geef microfoontoegang.
+5. Kies een tafel en klik Luister naar tafel.
+
+Er is geen installatie, account, API-sleutel, abonnement of internet nodig.
+Ruwe audio bestaat alleen tijdelijk tijdens verwerking en wordt daarna verwijderd.
+
+LIVE ZONDER EERST OP STOP TE DRUKKEN
+- “Automatisch afronden na stilte” staat standaard aan. De app meet eerst het omgevingsgeluid en rondt na ongeveer 1,6–1,9 seconden echte stilte af.
+- Voor en na de stem worden ruis en stilte in het werkgeheugen weggeknipt; die hoeven niet door Whisper verwerkt te worden.
+- “Live tekst tijdens praten via Microsoft Edge” is een afzonderlijke opt-in. Zet dit aan om al tijdens het praten voorlopige tekst en productbegrip te zien.
+- De live Edge-preview heeft internet nodig en stuurt alleen voor die preview audio naar Microsoft. Lokale Whisper controleert daarna de volledige opname.
+- Zonder live preview blijft alles lokaal en werkt automatisch afronden nog steeds.
+
+TWEE PAKKETTEN
+- Lokaal-Adaptief gebruikt Small Q5 eerst voor snelheid en Large-v3 Turbo Q5 automatisch wanneer de herkenning én menucontext onzeker blijven.
+- Lokaal-Licht bevat alleen Small Q5 voor oudere of zwakkere toestellen.
+
+De app is in beide pakketten identiek. Modellen staan los in offline-speech\models.
+Je hoeft het zware model dus niet op elk toestel te installeren. Wanneer een geschikt
+modelbestand later in die map wordt geplaatst, ontdekt Service Ears het automatisch.
+
+BESCHERMING TEGEN OVERBELASTING
+- Het sterkste veilige geïnstalleerde model wordt automatisch gekozen.
+- Er draait maximaal één transcriptie tegelijk.
+- Maximaal ongeveer 45% van de logische processors en nooit meer dan zes threads worden gebruikt.
+- Bij te weinig vrij geheugen wordt een lichter model gekozen.
+- Wanneer een model herhaaldelijk te traag is of faalt, schakelt de app tijdelijk terug.
+- De appserver draait met lagere procesprioriteit zodat Windows bruikbaar blijft.
+
+Klik bovenaan op Adaptief om te zien welk model actief is en waarom.
+
+BREDE CULINAIRE KENNIS
+- De taalbasis bevat meer dan 1.000 akoestische uitspraakvormen en meer dan 3.000 meertalige bestelzinnen.
+- Een gekend gerecht buiten de kaart wordt niet stilletjes vervangen of besteld.
+- Voorbeeld: bij kabeljauw meldt Service Ears dat dit niet actief in het POS staat en toont het Fish of the day (deze week zalm) en Pladijs als mogelijke richtlijn voor de ober.
+- Pas nadat de gast een alternatief bevestigt, mag de ober dat geldige POS-product aanklikken.
+- Een expliciete productcorrectie door de ober wordt meteen een lokale taalregel als er geen conflict is. Automatisch afgeleide regels vereisen nog steeds drie gelijke waarnemingen.
+
+SNEL TESTEN
+- Vraag: “Welke bieren hebben jullie?”
+- Dialect: “Wa hedde van bier?”
+- Bestelling: “Doe mij ne Duvel en twee pintjes.”
+- Vervolgcontext: vraag naar voorgerechten en zeg daarna “Geef mij die maar.”
+- Annulering: “Ik hoef misschien toch geen Duvel.”
+- Vervanging: “Doe toch maar cola zero in plaats van cola.”
+- Verhaal: “Mijn nonkel drinkt altijd Duvel.” Dit mag niets toevoegen.
+
+ONZEKERHEID EN VEILIGHEID
+Een onzekere productmatch verschijnt als één gerichte controle. Zolang die niet is
+opgelost kan de bestelling niet naar de mock-POS. De ober bevestigt de bestelling.
+
+PROBLEMEN
+- App opent maar verwerkt niets: sluit het tabblad en start opnieuw via de actuele Service Ears-snelkoppeling. Die opent Edge pas wanneer /api/health gezond is.
+- Startfout: open %LOCALAPPDATA%\Service Ears\logs\portable-server.stderr.log. Een fout start nooit meer als passieve appinterface.
+- Geen microfoon: geef Edge toestemming via het slotje naast het webadres.
+- Te stil: plaats de laptop dichterbij en voer Start shift opnieuw uit.
+- Eerste verwerking traag: het lokale model wordt één keer geladen en blijft daarna tijdelijk warm.
+- Poort bezet: sluit een eerder Service Ears-venster en probeer opnieuw.
+- Sterk model te traag: de app schakelt automatisch terug; open Adaptief voor de status.
+
+INTEGRITEIT EN LICENTIES
+Controleer CHECKSUMS-SHA256.txt met PowerShell Get-FileHash indien gewenst.
+Licenties en third-party notices staan in offline-speech en THIRD-PARTY-NOTICES.txt.

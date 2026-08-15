@@ -1,0 +1,59 @@
+SERVICE EARS - GRATIS BROWSERTEST
+================================
+
+Gebruik deze editie wanneer Windows Smart App Control de niet-ondertekende MSI blokkeert.
+
+STARTEN
+-------
+0. Was Service Ears al open? Sluit eerst het oude zwarte venster en start de app opnieuw. Zo wordt deze verbeterde versie geladen.
+1. Dubbelklik op Start-Service-Ears-Browsertest.cmd.
+2. Laat het zwarte venster open.
+3. Microsoft Edge opent Service Ears automatisch.
+4. Klik op Start shift, daarna op Luister naar tafel.
+5. Sta microfoontoegang toe wanneer Edge daarom vraagt.
+6. Blijf bij Start shift één seconde stil zodat het achtergrondniveau wordt gemeten. Spreek daarna je bestelling uit; automatisch afronden reageert op echte stilte boven die ruisvloer.
+
+LIVE EN BREDE KAARTKENNIS
+-------------------------
+- De voorlopige tekst verschijnt al tijdens het spreken.
+- De kennisbank kent ook gerechten die niet in de POS-kaart staan, in Nederlands, Engels en Frans met uitspraakvarianten.
+- Een niet-beschikbaar gerecht wordt nooit automatisch vervangen. Service Ears toont uitsluitend actieve alternatieven als richtlijn voor de ober.
+- Voorbeeld: kabeljauw kan leiden tot de veilige melding dat dit niet op de kaart staat, met Fish of the day (deze week zalm) en Pladijs als bespreekbare alternatieven.
+
+VERVOLGSPRAAK EN VRAGEN
+-----------------------
+- Een nieuwe opname wordt toegevoegd aan de huidige bestelling; bestaande regels blijven staan.
+- Klik op Nieuwe bestelling wanneer je echt opnieuw wilt beginnen.
+- Verwijderen kan natuurlijk worden uitgesproken: Ik hoef toch geen Duvel, laat dat pintje maar zitten, haal één Duvel weg of de vorige toch niet.
+- Je kunt menuvragen stellen, bijvoorbeeld: Welke bieren hebben jullie?
+- Service Ears toont dan de actieve producten en prijzen zonder ze als bestelling toe te voegen.
+- Vervolgzinnen gebruiken de context per tafel. Na Welke voorgerechten hebben jullie? kan bijvoorbeeld Geef me die maar, Dat klinkt goed of Doe maar het enige aangeboden voorgerecht registreren.
+- Ook dezelfde, nog eentje, de eerste, de tweede, de laatste, de goedkoopste, de blonde, de bruine en de alcoholvrije worden tegen de recente tafelcontext opgelost.
+- De context en conceptbestelling worden afzonderlijk per tafel op de laptop bewaard. Als de ober later naar dezelfde tafel terugkeert, zijn eerdere productverwijzingen nog beschikbaar. Nieuwe bestelling wist dit geheugen voor die tafel.
+- Mopjes en verhalen worden apart van echte bestelzinnen beoordeeld. Een productnaam in een verhaal wordt dus niet vanzelf besteld.
+- Als meerdere producten nog mogelijk zijn, toont Service Ears een keuze in plaats van te gokken.
+- Veelvoorkomende kleine herkenningsfouten worden met het kassamenu vergeleken. Zo wordt leven blond herkend als Leffe Blond.
+- Service Ears vergelijkt maximaal vijf transcripties van Edge met productnamen, aliassen, uitspraak en de rest van de zin. Voorbeelden zijn duivel -> Duvel, stelle -> Stella, lefe bruin -> Leffe Bruin en coka cola zero -> Coca-Cola Zero.
+- Een waarschijnlijke maar niet letterlijke productmatch wordt zichtbaar gemeld, zodat de kelner die voor verzending kan controleren.
+- Gewone zinnen zoals Mijn zus heet Stella, Duvel is lekker of Ik neem geen Duvel worden niet als bestelling toegevoegd.
+- Ook een herkenningsfout in een menuvraag, zoals Welke dieren hebben jullie in plaats van bieren, levert de bierkaart op en voegt niets toe.
+- Een onduidelijke naam zoals alleen Leffe of leven blijft veilig als keuzevraag zichtbaar, omdat meerdere Leffe-producten bestaan.
+
+OPGELOST IN DEZE VERSIE
+-----------------------
+- De Edge-fout phrases-not-supported is verwijderd. Productherkenning gebruikt geen experimentele browserfunctie meer.
+
+STOPPEN
+-------
+Sluit het zwarte Service Ears-venster of druk daar op Ctrl+C.
+
+PRIVACY EN KOSTEN
+-----------------
+- Geen OpenAI API-sleutel nodig.
+- Geen API- of gebruikskosten voor jou.
+- Het bestelproces en de mock-kassa draaien lokaal.
+- Microsoft Edge gebruikt voor deze browsertest zijn online Azure-spraakdienst. De audio verlaat daarom tijdelijk de laptop voor transcriptie.
+- Service Ears bewaart de opname of conversatie niet.
+- Alleen de conceptbestelling en maximaal twaalf relevante product-ID's per tafel worden lokaal als gespreksgeheugen bewaard. Nieuwe bestelling wist die tafelcontext.
+
+De volledig offline desktopeditie blijft beschikbaar voor later, maar moet door een vertrouwde certificaatautoriteit worden ondertekend om onder Smart App Control te werken.

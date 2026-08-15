@@ -1,4 +1,5 @@
 import type { DraftOrder, TenantMenu } from "@/src/domain/schemas";
+import { isOrderableProduct } from "@/src/semantic-menu/product-index";
 
 export interface ValidationResult {
   valid: boolean;
@@ -17,10 +18,13 @@ export function validateDraft(draft: DraftOrder, menu: TenantMenu): ValidationRe
   if (draft.issues.some((issue) => issue.blocking)) {
     errors.push("Draft has unresolved blocking issues.");
   }
+  if (draft.lines.length === 0) {
+    errors.push("Draft has no order lines.");
+  }
 
   for (const line of draft.lines) {
     const product = menu.products.find((candidate) => candidate.id === line.productId);
-    if (!product || !product.active) {
+    if (!product || !isOrderableProduct(product)) {
       errors.push(`Line ${line.lineId} references an unavailable POS product.`);
       continue;
     }

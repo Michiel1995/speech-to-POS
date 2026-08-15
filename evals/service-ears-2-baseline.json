@@ -1,0 +1,23 @@
+{
+  "generatedAt": "2026-08-11",
+  "automatedTests": { "passed": 249, "failed": 0 },
+  "intentRouterCases": { "passed": 114, "failed": 0 },
+  "mandatoryAcceptanceScenarios": { "passed": 20, "failed": 0 },
+  "conversationCorpus": { "total": 58, "deterministicPassing": 38, "nonDeterministicResearchCases": 20 },
+  "routerSafetyBaseline": {
+    "questionIntentAccuracy": 1,
+    "falseOrderRate": 0,
+    "note": "Measured on the passing labeled router corpus; not a claim about arbitrary real-world audio."
+  },
+  "runtime": {
+    "browserOutputPassed": true,
+    "localOfflineOutputPassed": true,
+    "browserConsoleErrors": 0,
+    "offlineTranscriptionMsWarmRun": 18181,
+    "offlineConfidence": 0.651,
+    "vadUsed": true,
+    "products": ["POS-3001", "POS-1001"],
+    "duvelQuantity": 2,
+    "modifiers": ["MOD-FRIES", "MOD-PEPPER"]
+  }
+}

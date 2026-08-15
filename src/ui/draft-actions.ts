@@ -50,6 +50,21 @@ export function resolveWithProduct(
   return nextDraft(draft, [...draft.lines, line], [...remaining, ...requiredModifierIssues(line, product, menu)]);
 }
 
+export function resolveRemovingProduct(
+  draft: DraftOrder,
+  issueId: string,
+  product: MenuProduct,
+): DraftOrder {
+  const removedLineIds = new Set(
+    draft.lines.filter((line) => line.productId === product.id).map((line) => line.lineId),
+  );
+  const lines = draft.lines.filter((line) => line.productId !== product.id);
+  const issues = draft.issues.filter(
+    (issue) => issue.id !== issueId && (!issue.lineId || !removedLineIds.has(issue.lineId)),
+  );
+  return nextDraft(draft, lines, issues);
+}
+
 export function resolveModifier(
   draft: DraftOrder,
   issueId: string,
@@ -80,6 +95,35 @@ export function resolveModifier(
 
 export function resolveIssueWithoutData(draft: DraftOrder, issueId: string): DraftOrder {
   return nextDraft(draft, draft.lines, draft.issues.filter((issue) => issue.id !== issueId));
+}
+
+export function confirmSpeechProduct(draft: DraftOrder, issueId: string): DraftOrder {
+  const issue = draft.issues.find((candidate) => candidate.id === issueId && candidate.type === "speech_confirmation");
+  if (!issue?.lineId) return draft;
+  const lines = draft.lines.map((line) =>
+    line.lineId === issue.lineId ? { ...line, confidence: 1 } : line,
+  );
+  return nextDraft(draft, lines, draft.issues.filter((candidate) => candidate.id !== issueId));
+}
+
+export function rejectSpeechProduct(draft: DraftOrder, issueId: string): DraftOrder {
+  const issue = draft.issues.find((candidate) => candidate.id === issueId && candidate.type === "speech_confirmation");
+  if (!issue?.lineId) return draft;
+  const line = draft.lines.find((candidate) => candidate.lineId === issue.lineId);
+  if (!line) return resolveIssueWithoutData(draft, issueId);
+  const quantityDelta = Math.max(1, issue.quantityDelta ?? 1);
+  const removeLine = line.quantity <= quantityDelta;
+  const lines = removeLine
+    ? draft.lines.filter((candidate) => candidate.lineId !== line.lineId)
+    : draft.lines.map((candidate) =>
+        candidate.lineId === line.lineId
+          ? { ...candidate, quantity: candidate.quantity - quantityDelta }
+          : candidate,
+      );
+  const issues = draft.issues.filter((candidate) =>
+    candidate.id !== issueId && (!removeLine || candidate.lineId !== line.lineId),
+  );
+  return nextDraft(draft, lines, issues);
 }
 
 export function addManualProduct(draft: DraftOrder, product: MenuProduct, menu: TenantMenu): DraftOrder {

@@ -3,6 +3,20 @@
 The app is deployment-ready but no hosting account credentials are stored here. A
 real smartphone microphone requires an HTTPS URL.
 
+## Windows local model packs
+
+Use `Service-Ears-3.2-Lokaal-Adaptief` on a roughly 16 GB development laptop. It
+contains Large-v3 Turbo Q5 plus Small Q5 reserve. Use
+`Service-Ears-3.2-Lokaal-Licht` on weaker or unknown hardware; it contains only Small
+Q5. Both packages run the same app and accept compatible model files in
+`offline-speech/models`, so rollout does not permanently depend on one large model.
+
+The adaptive runtime checks total/free memory and processor count before loading a
+model, caps transcription threads, keeps only one job active, monitors measured
+latency, falls back after failures or repeated slowness, and unloads the warm model
+after inactivity. Pilot each target hardware class with noisy real restaurant audio;
+hardware safety and recognition quality are separate acceptance criteria.
+
 ## Fastest hosted path (Vercel)
 
 1. Import the GitHub repository into Vercel as a Next.js project.

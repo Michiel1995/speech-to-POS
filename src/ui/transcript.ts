@@ -30,3 +30,7 @@ export function parseTranscript(value: string): ConversationTurn[] {
 export function formatTurns(turns: ConversationTurn[]): string {
   return turns.map((turn) => `${turn.speaker === "waiter" ? "Waiter" : turn.speaker === "customer" ? "Customer" : "Unknown"}: ${turn.text}`).join("\n");
 }
+
+export function shouldClearTranscriptAfterSuccess(source: "text" | "audio" | "manual"): boolean {
+  return source !== "manual";
+}

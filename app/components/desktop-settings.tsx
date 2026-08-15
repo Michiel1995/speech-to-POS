@@ -1,101 +1,207 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
+
+import { formatPrivacySafeDiagnostics } from "@/src/ui/diagnostics";
+
+const VOICE_PERFORMANCE_KEY = "service-ears:voice-performance:v1";
+
+interface LocalSpeechHealth {
+  configured: boolean;
+  policy: "adaptive" | "fixed";
+  selectedModel?: {
+    id: string;
+    label: string;
+    tier: string;
+    fileSizeMb: number;
+    estimatedMemoryMb: number;
+    threadCount: number;
+    reason: string;
+  };
+  installedModels: Array<{
+    id: string;
+    label: string;
+    tier: string;
+    fileSizeMb: number;
+    eligible: boolean;
+    reason: string;
+    averageProcessingMs?: number;
+    averageRealtimeFactor?: number;
+  }>;
+  device: {
+    totalMemoryGb: number;
+    freeMemoryGb: number;
+    logicalProcessors: number;
+    maxSpeechThreads: number;
+    maxConcurrentTranscriptions: number;
+    backend: string;
+  };
+  targetLatencyMs: number;
+  queuedTranscriptions?: number;
+  activeTranscriptions?: number;
+}
+
+interface HealthResponse {
+  ok?: boolean;
+  adapter?: string;
+  offlineSpeechConfigured?: boolean;
+  offlineVadConfigured?: boolean;
+  localSpeech?: LocalSpeechHealth;
+  culinaryKnowledge?: { concepts: number; acousticAliases: number; speechForms: number };
+  retention?: string;
+}
 
 export function DesktopSettings() {
-  const [status, setStatus] = useState<ServiceEarsDesktopStatus>();
+  const [desktopStatus, setDesktopStatus] = useState<ServiceEarsDesktopStatus>();
+  const [localSpeech, setLocalSpeech] = useState<LocalSpeechHealth>();
+  const [culinaryKnowledge, setCulinaryKnowledge] = useState<HealthResponse["culinaryKnowledge"]>();
+  const [health, setHealth] = useState<HealthResponse>();
   const [open, setOpen] = useState(false);
-  const [key, setKey] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [serverError, setServerError] = useState<string>();
+  const [diagnosticsStatus, setDiagnosticsStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
 
   useEffect(() => {
     const bridge = window.serviceEarsDesktop;
-    if (!bridge) return;
-    void bridge.getStatus().then((nextStatus) => {
-      setStatus(nextStatus);
-      if (!nextStatus.openaiConfigured) setOpen(true);
-    });
-    return bridge.onServerError(setError);
+    let unsubscribe: (() => void) | undefined;
+    if (bridge) {
+      void bridge.getStatus().then(setDesktopStatus);
+      unsubscribe = bridge.onServerError(setServerError);
+    }
+    void fetch("/api/health")
+      .then(async (response) => response.ok ? response.json() as Promise<HealthResponse> : undefined)
+      .then((health) => {
+        setHealth(health);
+        setLocalSpeech(health?.localSpeech);
+        setCulinaryKnowledge(health?.culinaryKnowledge);
+      })
+      .catch(() => { /* the main console reports server availability */ });
+    return () => unsubscribe?.();
   }, []);
 
-  if (!status) return null;
-
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    const bridge = window.serviceEarsDesktop;
-    if (!bridge) return;
-    setBusy(true);
-    setError(undefined);
+  const copyDiagnostics = async () => {
+    setDiagnosticsStatus("copying");
+    let currentHealth = health;
     try {
-      const nextStatus = await bridge.saveOpenAIKey(key);
-      setStatus(nextStatus);
-      setKey("");
-      setOpen(false);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "De API-sleutel kon niet worden opgeslagen.");
-    } finally {
-      setBusy(false);
+      const response = await fetch("/api/health", { cache: "no-store" });
+      if (response.ok) {
+        currentHealth = await response.json() as HealthResponse;
+        setHealth(currentHealth);
+        setLocalSpeech(currentHealth.localSpeech);
+        setCulinaryKnowledge(currentHealth.culinaryKnowledge);
+      }
+    } catch {
+      // A useful offline diagnostic can still be copied from the last known health.
+    }
+
+    const report = formatPrivacySafeDiagnostics({
+      generatedAt: new Date().toISOString(),
+      appVersion: desktopStatus?.appVersion,
+      desktop: Boolean(window.serviceEarsDesktop),
+      online: navigator.onLine,
+      language: navigator.language,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio,
+      },
+      health: currentHealth,
+      performanceJson: localStorage.getItem(VOICE_PERFORMANCE_KEY),
+      serverErrorPresent: Boolean(serverError || !currentHealth?.ok),
+    });
+
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(report);
+      setDiagnosticsStatus("copied");
+    } catch {
+      setDiagnosticsStatus("error");
     }
   };
 
-  const clear = async () => {
-    const bridge = window.serviceEarsDesktop;
-    if (!bridge) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const nextStatus = await bridge.clearOpenAIKey();
-      setStatus(nextStatus);
-      setOpen(true);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "De API-sleutel kon niet worden verwijderd.");
-    } finally {
-      setBusy(false);
-    }
-  };
+  const available = Boolean(localSpeech?.configured || desktopStatus?.offlineSpeechAvailable);
+  if (!available && !desktopStatus) return null;
+  const selected = localSpeech?.selectedModel;
+  const hasAdaptiveCascade = localSpeech?.policy === "adaptive" && Boolean(
+    localSpeech.installedModels.some((model) => model.tier === "small" && model.eligible) &&
+    localSpeech.installedModels.some((model) => ["medium", "large-turbo", "large"].includes(model.tier) && model.eligible),
+  );
 
   return (
     <>
       <button className="settings-button" onClick={() => setOpen(true)}>
-        {status.openaiConfigured ? "Spraak actief" : "Spraak instellen"}
+        {available
+          ? hasAdaptiveCascade
+            ? "Snel · sterk bij twijfel"
+            : selected
+            ? `Adaptief · ${selected.label.replace("Whisper ", "")}`
+            : "Gratis spraak actief"
+          : "Spraakmodule ontbreekt"}
       </button>
       {open && (
-        <div className="settings-backdrop" role="presentation">
+        <div className="settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>
           <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="settings-title-row">
               <div>
-                <p className="step">DESKTOPINSTELLINGEN</p>
-                <h2 id="settings-title">Spraak activeren</h2>
+                <p className="step">ADAPTIEVE LOKALE SPRAAK</p>
+                <h2 id="settings-title">Sterk zonder overbelasting</h2>
               </div>
-              {status.openaiConfigured && <button className="settings-close" onClick={() => setOpen(false)} aria-label="Sluiten">×</button>}
+              <button className="settings-close" onClick={() => setOpen(false)} aria-label="Sluiten">×</button>
             </div>
             <p>
-              Voeg je OpenAI API-sleutel toe om gesprekken via de microfoon te transcriberen.
-              De sleutel wordt versleuteld bewaard in je Windows-profiel en wordt nooit naar de browser gestuurd.
+              Service Ears gebruikt een snelle lokale eerste passage. Wanneer taalzekerheid én menucontext te zwak zijn,
+              controleert het sterkere geïnstalleerde model automatisch opnieuw. Er draait maximaal één transcriptie tegelijk.
             </p>
-            <form onSubmit={(event) => void save(event)}>
-              <label htmlFor="desktop-openai-key">OpenAI API-sleutel</label>
-              <input
-                id="desktop-openai-key"
-                type="password"
-                value={key}
-                onChange={(event) => setKey(event.target.value)}
-                placeholder={status.openaiConfigured ? "Nieuwe sleutel invoeren…" : "sk-…"}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={busy || !status.encryptedStorageAvailable}
-              />
-              {!status.encryptedStorageAvailable && <p className="settings-error">Windows-versleuteling is niet beschikbaar.</p>}
-              {error && <p className="settings-error">{error}</p>}
-              <div className="settings-actions">
-                {status.openaiConfigured && <button type="button" className="danger-button" onClick={() => void clear()} disabled={busy}>Sleutel verwijderen</button>}
-                <button type="submit" className="primary-button" disabled={busy || !key.trim() || !status.encryptedStorageAvailable}>
-                  {busy ? "Opslaan en herstarten…" : "Opslaan en spraak activeren"}
-                </button>
+            <div className={available ? "settings-success" : "settings-error"}>
+              {selected
+                ? <><strong>{hasAdaptiveCascade ? "Small → Large-v3 Turbo bij twijfel" : selected.label}</strong><br />{selected.reason}. Maximaal {selected.threadCount} processorthreads.</>
+                : available
+                  ? `${desktopStatus?.speechModel ?? "Het lokale spraakmodel"} is geïnstalleerd en klaar voor gebruik.`
+                  : "De spraakmodule is niet gevonden. Installeer de nieuwste Service Ears-versie opnieuw."}
+            </div>
+            {localSpeech && <>
+              <p className="model-device-summary">
+                Toestel: {localSpeech.device.totalMemoryGb} GB RAM · {localSpeech.device.logicalProcessors} logische processors · {localSpeech.device.backend}.
+              </p>
+              {culinaryKnowledge && <p className="model-device-summary">
+                Taalbasis: {culinaryKnowledge.concepts} culinaire concepten · {culinaryKnowledge.acousticAliases.toLocaleString("nl-BE")} uitspraakvormen · {culinaryKnowledge.speechForms.toLocaleString("nl-BE")} meertalige oefenzinnen.
+              </p>}
+              <div className="model-list">
+                {localSpeech.installedModels.map((model) => <div className="model-row" key={model.id}>
+                  <div><strong>{model.label}</strong><span>{Math.round(model.fileSizeMb)} MB · {model.eligible ? "beschikbaar" : model.reason}</span></div>
+                  <span className={selected?.id === model.id ? "model-active" : "model-standby"}>
+                    {model.eligible && hasAdaptiveCascade
+                      ? model.tier === "small" ? "SNEL" : ["medium", "large-turbo", "large"].includes(model.tier) ? "CONTROLE" : "RESERVE"
+                      : selected?.id === model.id ? "ACTIEF" : model.eligible ? "RESERVE" : "UIT"}
+                  </span>
+                </div>)}
               </div>
-            </form>
-            <small>Service Ears {status.appVersion} · Audio wordt na verwerking verwijderd.</small>
+            </>}
+            {serverError && <p className="settings-error">{serverError}</p>}
+            <div className="diagnostics-panel">
+              <div>
+                <strong>Hulp nodig?</strong>
+                <span>Kopieer technische status zonder audio, transcript, bestelling of tafelgegevens.</span>
+              </div>
+              <button
+                type="button"
+                className="secondary-button diagnostics-button"
+                disabled={diagnosticsStatus === "copying"}
+                onClick={() => void copyDiagnostics()}
+              >
+                {diagnosticsStatus === "copying" ? "Controleren…" : "Diagnose kopiëren"}
+              </button>
+            </div>
+            <p className={`diagnostics-status ${diagnosticsStatus === "error" ? "is-error" : ""}`} aria-live="polite">
+              {diagnosticsStatus === "copied" && "Diagnose gekopieerd — veilig om te delen."}
+              {diagnosticsStatus === "error" && "Kopiëren lukte niet. Controleer de klembordtoegang en probeer opnieuw."}
+            </p>
+            <div className="settings-actions">
+              <button type="button" className="primary-button" onClick={() => setOpen(false)}>Begrepen</button>
+            </div>
+            <small>
+              Geen API-sleutel of abonnement · modellen zijn verwisselbaar per toestel · audio wordt na verwerking verwijderd.
+              {desktopStatus ? ` Service Ears ${desktopStatus.appVersion}.` : ""}
+            </small>
           </section>
         </div>
       )}

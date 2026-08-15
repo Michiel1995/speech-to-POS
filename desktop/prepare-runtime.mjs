@@ -19,7 +19,12 @@ if (path.dirname(output) !== projectRoot) {
   throw new Error("Ongeldig desktop-runtimepad.");
 }
 
-fs.rmSync(output, { recursive: true, force: true });
+if (fs.existsSync(output)) {
+  for (const entry of fs.readdirSync(output)) {
+    if (entry === "runtime_modules") continue;
+    fs.rmSync(path.join(output, entry), { recursive: true, force: true });
+  }
+}
 fs.cpSync(standaloneSource, output, {
   recursive: true,
   dereference: true,
@@ -39,6 +44,10 @@ fs.cpSync(publicSource, path.join(output, "public"), {
   dereference: true,
   preserveTimestamps: true,
 });
+fs.copyFileSync(
+  path.join(desktopDirectory, "server-bootstrap.cjs"),
+  path.join(output, "server-bootstrap.cjs"),
+);
 
 const projectPackage = JSON.parse(fs.readFileSync(projectPackagePath, "utf8"));
 const projectRequire = createRequire(projectPackagePath);
@@ -87,6 +96,9 @@ function materializePackage(packageName, sourceRoot, destinationNodeModules) {
     recursive: true,
     dereference: true,
     preserveTimestamps: true,
+    filter(source) {
+      return !source.endsWith(".d.ts") && !source.endsWith(".d.mts") && !source.endsWith(".map");
+    },
   });
   installedTargets.add(target);
 

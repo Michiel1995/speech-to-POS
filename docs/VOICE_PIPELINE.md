@@ -1,36 +1,73 @@
 # Voice pipeline
 
-## MVP path
+## Offline prototype path
 
-1. Browser `MediaRecorder` captures a manually bounded interaction over HTTPS.
-2. The blob is posted to the server and never written to application storage.
-3. `gpt-4o-transcribe-diarize` requests `diarized_json`, producing timestamped
-   speaker segments. The current [OpenAI Audio API reference](https://developers.openai.com/api/reference/resources/audio)
-   documents this speaker-labelled response format.
-4. Conservative phrase markers identify a likely waiter speaker. Without evidence,
-   roles stay `unknown`; the system does not fabricate identity.
-5. `gpt-5.4-mini` uses structured output to reduce the conversation to final confirmed
-   item concepts. Its [official model page](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
-   lists Structured Outputs support.
-6. The deterministic menu layer maps concepts to POS IDs and blocks uncertainty.
+1. Shift start measures the ambient noise floor while the waiter stays quiet. The
+   renderer captures mono PCM and an adaptive detector finishes after roughly
+   1.6–1.9 seconds below the speech-over-noise threshold.
+2. When explicitly enabled, Microsoft Edge supplies provisional transcript deltas
+   while the guest speaks. These render immediately but never bypass the final local
+   pass; disabling the option keeps the entire path local.
+3. The renderer downsamples to 16 kHz, high-pass filters low-frequency rumble, trims
+   non-speech before/after the utterance, applies bounded normalization, and encodes a
+   16-bit WAV in memory. Pauses inside the utterance remain intact.
+4. The WAV is posted only to the app's server on `127.0.0.1`.
+5. Bundled Silero VAD isolates speech from silence and background noise. Its threshold,
+   minimum speech duration, silence split and padding adapt to measured quietness and clipping before
+   bundled whisper.cpp v1.9.1 and the installed multilingual models transcribe locally.
+   The adaptive package starts with Small Q5 and escalates uncertain, weakly grounded
+   results to Large-v3 Turbo Q5; the light package remains Small-only.
+6. Current table context, ordered products, canonical menu names, POS names, aliases,
+   and modifier pronunciations are prioritized inside the decoding prompt.
+7. A persistent localhost-only whisper server keeps the selected model warm between
+   utterances and unloads it after three idle minutes. Only one transcription runs at
+   once, no more than two wait, and CPU use is capped to at most six threads in the
+   portable build. The CLI remains an automatic process-level fallback.
+8. The decoder uses bounded beam/best-of search. A retry only occurs when acoustic
+   confidence is low *and* menu/context evidence is weak. A short answer with exactly
+   one offered product may use the installed Small model as a safe low-latency path;
+   open orders and ambiguous choices stay on the strongest available model.
+9. A shared hypothesis ranker combines acoustic confidence, phonetic distance,
+   active-menu fit, current category, table history, existing order lines, dialogue
+   intent and decoder-artifact penalties. The score margin remains available to the UI.
+10. The deterministic multilingual engine maps the transcript to current mock-POS IDs.
+   Unlisted fuzzy matches require an explicit yes/no confirmation; ambiguity, missing
+   modifiers, and unusual timing remain blocking human-review issues.
+11. A separate culinary knowledge layer recognizes known dishes outside the POS and
+   proposes only active same-family alternatives as waiter guidance. Substitution is
+   never automatic.
+12. The temporary WAV and all JSON transcript candidates are removed after every request.
 
-The two-stage design is intentional: the realtime/audio model layer does not itself
-provide strict structured outputs, so POS-safe extraction is isolated. OpenAI’s
-[GPT-Realtime documentation](https://developers.openai.com/api/docs/models/gpt-realtime)
-also confirms WebRTC/WebSocket/SIP support for a future streaming implementation.
+## Word recognition safeguards
+
+- Exact menu names are evaluated before fuzzy spans, so quantities and words such as
+  `met` or `nog` cannot be swallowed by a larger guessed product phrase.
+- Weighted phonetics handle common Dutch/Flemish/French/English confusions, including
+  v/f/w, b/p, d/t, s/z, c/k, vowel length, final-n loss and shortened syllables.
+- Fuzzy candidates carry acoustic score, table/category/order bonuses, score margin
+  and evidence. A non-exact audio match still requires explicit confirmation.
+- Questions, stories, jokes, negations and waiter menu listings are routed before any
+  POS mutation. Context can help rank a candidate but is capped and cannot create an
+  order from an acoustically unrelated word.
+
+The language selector defaults to Dutch and also supports French, English, or
+automatic detection. A fixed language is preferable for short restaurant utterances.
 
 ## Current limitations
 
-- Audio calls are **implemented but unverified** without an API key.
-- MVP audio is near-real-time after manual stop, not continuous background shift
-  streaming. Shift mode is a user-experience scaffold with manual control.
-- Diarization labels speakers; it does not reliably determine waiter identity in every
-  noisy restaurant. Optional biometric voice profiles are not implemented.
-- Nearby speech, overlap, Belgian accents, and music require field measurements.
+- The free local Whisper final pass still runs per completed turn rather than decoding
+  PCM token-by-token. Opt-in Edge supplies live provisional deltas; automatic silence
+  detection removes the need to press Stop for ordinary turns.
+- The local model uses linguistic waiter markers but does not perform biometric
+  speaker identification or full acoustic diarization.
+- Nearby speech, overlapping speakers, strong Belgian accents, music, and very unclear
+  articulation still require field testing. No recognizer can guarantee every utterance.
+- The bundled prototype targets Windows x64. Model eligibility considers installed
+  RAM, currently free RAM and logical processors; it still needs validation on every
+  intended device class.
 
-## Upgrade path
+## Possible pilot upgrade
 
-Move capture to Realtime WebRTC with server-created ephemeral sessions, semantic VAD,
-and rolling provisional state. Keep final post-interaction structured extraction and
-deterministic validation unchanged. Wearables implement `AudioInput`; they do not
-change the order or POS layers.
+Keep the same WAV, draft, validation, and POS boundaries while adding streaming capture,
+larger local models, GPU acceleration, or an explicitly selected hosted provider.
+Wearables should implement the audio-input boundary without changing order safety.

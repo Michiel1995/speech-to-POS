@@ -1,6 +1,6 @@
 {
   "name": "speech-to-pos",
-  "version": "0.1.0",
+  "version": "0.3.5",
   "description": "Installable AI voice layer for safe hospitality POS draft preparation.",
   "author": "Michiel1995",
   "private": true,
@@ -11,15 +11,17 @@
   },
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "repo:safety": "node scripts/repository-safety.mjs",
     "eval": "vitest run tests/evaluation-corpus.test.ts",
     "desktop:run": "electron .",
     "desktop:prepare": "node desktop/prepare-runtime.mjs",
+    "package:test-outputs": "node desktop/package-test-outputs.mjs",
     "desktop:dir": "pnpm build && pnpm desktop:prepare && electron-builder --win dir",
     "desktop:build": "pnpm build && pnpm desktop:prepare && electron-builder --win msi"
   },
@@ -57,6 +59,10 @@
       {
         "from": "desktop-runtime",
         "to": "app"
+      },
+      {
+        "from": "offline-speech",
+        "to": "offline-speech"
       }
     ],
     "win": {

@@ -1,0 +1,9 @@
+Service Ears portable runtime includes:
+- Node.js runtime — https://github.com/nodejs/node/blob/main/LICENSE
+- Next.js — https://github.com/vercel/next.js/blob/canary/license.md
+- React — https://github.com/facebook/react/blob/main/LICENSE
+- whisper.cpp — see offline-speech/LICENSE-whisper.cpp.txt
+- OpenAI Whisper model — see offline-speech/LICENSE-openai-whisper.txt
+- Silero VAD model — see offline-speech/LICENSE-silero-vad.txt
+
+The package is intended as a local prototype. Product and venue data remain controlled by the configured POS adapter.
