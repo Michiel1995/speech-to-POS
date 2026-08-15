@@ -48,6 +48,7 @@ interface RunningWhisperServer {
   logTail: string;
   startupError?: Error;
   ready?: Promise<void>;
+  prime?: Promise<void>;
   idleTimer?: NodeJS.Timeout;
 }
 
@@ -192,10 +193,62 @@ async function ensureWhisperServer(selection: LocalWhisperSelection): Promise<Ru
 
 export async function warmLocalWhisperServer(selection: LocalWhisperSelection): Promise<boolean> {
   try {
-    return Boolean(await ensureWhisperServer(selection));
+    const server = await ensureWhisperServer(selection);
+    if (!server) return false;
+    server.prime ??= primeWhisperServer(server);
+    await server.prime;
+    scheduleIdleUnload(server);
+    return true;
   } catch (error) {
     console.warn("Lokale spraakserver kon niet vooraf worden geladen; de normale fallback blijft beschikbaar:", error);
+    stopWhisperServer();
     return false;
+  }
+}
+
+export function createWhisperWarmupWav(durationMs = 500, sampleRate = 16_000): Uint8Array<ArrayBuffer> {
+  const sampleCount = Math.max(1, Math.round(sampleRate * Math.max(100, durationMs) / 1_000));
+  const pcmBytes = sampleCount * 2;
+  const wav = new Uint8Array(new ArrayBuffer(44 + pcmBytes));
+  const view = new DataView(wav.buffer);
+  const ascii = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) wav[offset + index] = value.charCodeAt(index);
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, 36 + pcmBytes, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, pcmBytes, true);
+  return wav;
+}
+
+async function primeWhisperServer(server: RunningWhisperServer): Promise<void> {
+  const form = new FormData();
+  form.append("file", new Blob([createWhisperWarmupWav()], { type: "audio/wav" }), "warmup.wav");
+  append(form, "language", "nl");
+  append(form, "response_format", "json");
+  append(form, "prompt", "horeca bestelling");
+  append(form, "beam_size", 1);
+  append(form, "best_of", 1);
+  append(form, "max_context", 64);
+  append(form, "max_len", 16);
+  append(form, "temperature", 0);
+  append(form, "vad", false);
+  const response = await fetch(`${server.origin}/inference`, {
+    method: "POST",
+    body: form,
+    signal: AbortSignal.timeout(45_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Lokale spraakserver kon niet worden geprimed: ${response.status} ${(await response.text()).slice(0, 300)}`);
   }
 }
 

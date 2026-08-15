@@ -47,6 +47,14 @@ import {
 } from "@/src/ui/draft-actions";
 import { completedBrowserSpeechText, rankSpeechHypotheses } from "@/src/speech/recognition-ranker";
 import { evaluateVoiceLatencyGate, FINAL_REVIEW_BUDGET_MS, PROVISIONAL_REVIEW_BUDGET_MS } from "@/src/speech/latency-budget";
+import {
+  LOCAL_SPEECH_KEEPALIVE_MS,
+  LOCAL_SPEECH_WARMUP_TIMEOUT_MS,
+  localSpeechRecordingReady,
+  localSpeechWarmupRequired,
+  type LocalSpeechWarmupState,
+  type SpeechMode,
+} from "@/src/speech/warmup-policy";
 import { findProductMentions } from "@/src/semantic-menu/matcher";
 import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
 import { formatTurns, parseTranscript, shouldClearTranscriptAfterSuccess } from "@/src/ui/transcript";
@@ -253,9 +261,10 @@ export function VoiceOrderConsole() {
   const [busy, setBusy] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [recording, setRecording] = useState<"conversation" | "correction">();
-  const [speechMode, setSpeechMode] = useState<"detecting" | "offline" | "browser" | "unavailable">("detecting");
+  const [speechMode, setSpeechMode] = useState<SpeechMode>("detecting");
   const [speechInsight, setSpeechInsight] = useState<string>();
   const [shiftMode, setShiftMode] = useState(false);
+  const [speechWarmupState, setSpeechWarmupState] = useState<LocalSpeechWarmupState>("idle");
   const [error, setError] = useState<string>();
   const [audioLevel, setAudioLevel] = useState(0);
   const [tableEvents, setTableEvents] = useState<TableMemoryEvent[]>([]);
@@ -299,6 +308,8 @@ export function VoiceOrderConsole() {
   const ambientNoiseFloor = useRef(0.004);
   const adaptiveNoiseFloor = useRef(0.004);
   const silenceTimer = useRef<number | undefined>(undefined);
+  const speechWarmupTimer = useRef<number | undefined>(undefined);
+  const speechWarmupInFlight = useRef(false);
   const recordingStartedAt = useRef(0);
   const stoppingRecording = useRef(false);
   const operationCoordinator = useRef(new VoiceOperationCoordinator());
@@ -507,6 +518,7 @@ export function VoiceOrderConsole() {
     if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
     provisionalReviewController.current?.abort();
     if (silenceTimer.current) window.clearInterval(silenceTimer.current);
+    if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
     recordingStream.current?.getTracks().forEach((track) => track.stop());
     audioSource.current?.disconnect();
     audioProcessor.current?.disconnect();
@@ -972,17 +984,32 @@ export function VoiceOrderConsole() {
   };
 
   const toggleShift = async () => {
+    if (speechWarmupInFlight.current) return;
     if (shiftMode) {
+      if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
+      speechWarmupTimer.current = undefined;
       setShiftMode(false);
+      setSpeechWarmupState("idle");
       setMicrophoneStatus("Shift gepauzeerd");
       return;
     }
-    if (window.serviceEarsDesktop || speechMode === "offline") {
-      void fetch("/api/transcribe/warmup", {
-        method: "POST",
-        signal: AbortSignal.timeout(50_000),
-      }).catch(() => { /* The regular CLI/model fallback remains available. */ });
-    }
+    const needsLocalWarmup = localSpeechWarmupRequired(Boolean(window.serviceEarsDesktop), speechMode);
+    speechWarmupInFlight.current = true;
+    setSpeechWarmupState(needsLocalWarmup ? "warming" : "ready");
+    const requestWarmup = async () => {
+      try {
+        const response = await fetch("/api/transcribe/warmup", {
+          method: "POST",
+          signal: AbortSignal.timeout(LOCAL_SPEECH_WARMUP_TIMEOUT_MS),
+        });
+        if (!response.ok) return false;
+        const result = await response.json() as { warmed?: boolean };
+        return result.warmed === true;
+      } catch {
+        return false;
+      }
+    };
+    const warmup = needsLocalWarmup ? requestWarmup() : Promise.resolve(true);
     setMicrophoneStatus("Ruis meten… blijf één seconde stil");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -1017,7 +1044,30 @@ export function VoiceOrderConsole() {
     } catch {
       setMicrophoneStatus("Kalibratie overgeslagen · controleer microfoontoegang");
     }
+    const warmed = await warmup;
+    speechWarmupInFlight.current = false;
+    if (!warmed) {
+      setSpeechWarmupState("error");
+      setMicrophoneStatus("Spraakmotor niet gereed · start de dienst opnieuw");
+      setError("De lokale spraakmotor kon niet veilig worden voorverwarmd. Er is nog geen opname gestart; probeer Start dienst opnieuw.");
+      return;
+    }
+    setSpeechWarmupState("ready");
+    setMicrophoneStatus((current) => needsLocalWarmup ? `${current} · spraakmotor warm` : current);
     setShiftMode(true);
+    if (needsLocalWarmup) {
+      speechWarmupTimer.current = window.setInterval(() => {
+        void requestWarmup().then((stillWarm) => {
+          if (stillWarm) return;
+          if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
+          speechWarmupTimer.current = undefined;
+          setSpeechWarmupState("error");
+          setShiftMode(false);
+          setMicrophoneStatus("Spraakmotor afgekoeld · start de dienst opnieuw");
+          setError("De lokale spraakmotor verloor zijn gereedstatus. Opname is geblokkeerd zodat de eerste bestelling niet op een koude of onzekere route terechtkomt.");
+        });
+      }, LOCAL_SPEECH_KEEPALIVE_MS);
+    }
   };
 
   const startRecording = async (purpose: "conversation" | "correction") => {
@@ -1298,8 +1348,8 @@ export function VoiceOrderConsole() {
           <span className={`network ${speechMode === "unavailable" ? "offline" : "online"}`}>
             {speechMode === "offline" ? "100% lokaal" : speechMode === "browser" ? "Gratis browsertest" : speechMode === "unavailable" ? "Open in Microsoft Edge" : "Spraak controleren…"}
           </span>
-          <button className={`shift-toggle ${shiftMode ? "active" : ""}`} onClick={() => void toggleShift()}>
-            {shiftMode ? "Dienst actief" : "Start dienst"}
+          <button className={`shift-toggle ${shiftMode ? "active" : ""}`} disabled={speechWarmupState === "warming"} onClick={() => void toggleShift()}>
+            {speechWarmupState === "warming" ? "Spraakmotor opwarmen…" : shiftMode ? "Dienst actief" : "Start dienst"}
           </button>
         </div>
       </header>
@@ -1338,7 +1388,7 @@ export function VoiceOrderConsole() {
           <div className="record-command">
             <button
               className={`record-button ${recording === "conversation" ? "recording" : ""}`}
-              disabled={busy || !menu || !shiftMode || recording === "correction" || speechMode === "unavailable" || speechMode === "detecting"}
+              disabled={busy || !menu || !shiftMode || !localSpeechRecordingReady(speechMode, speechWarmupState) || recording === "correction" || speechMode === "unavailable" || speechMode === "detecting"}
               onClick={() => recording === "conversation" ? void stopRecording() : void startRecording("conversation")}
               aria-label={recording === "conversation" ? "Opname stoppen" : "Gesprek opnemen"}
             >

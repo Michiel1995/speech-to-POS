@@ -16,6 +16,7 @@
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:latency": "vitest --config vitest.latency.config.ts run",
     "test:watch": "vitest",
     "repo:safety": "node scripts/repository-safety.mjs",
     "eval": "vitest run tests/evaluation-corpus.test.ts",
