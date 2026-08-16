@@ -4,6 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { preparedRecordingToWav, type PreparedSpeechPcm } from "@/src/audio/pcm-wav";
 import { analyzeAudioQuality, audioQualityMessage, type AudioQualityResult } from "@/src/audio/audio-quality";
+import {
+  automaticSilenceDelaySeconds,
+  MAX_AUTOMATIC_RECORDING_SECONDS,
+} from "@/src/audio/endpointing";
 import type { DialectProfile } from "@/src/language/flemish-dialect";
 import {
   approvedAliases,
@@ -1134,11 +1138,15 @@ export function VoiceOrderConsole() {
       startOfflineLivePreview(purpose, operation);
       silenceTimer.current = window.setInterval(() => {
         const elapsedSeconds = context.currentTime - recordingStartedAt.current;
-        const finishDelaySeconds = adaptiveNoiseFloor.current >= 0.018 ? 1.55 : 1.9;
+        const finishDelaySeconds = automaticSilenceDelaySeconds({
+          noiseFloorRms: adaptiveNoiseFloor.current,
+          spokenDurationSeconds: Math.max(0, lastVoiceAt.current - recordingStartedAt.current),
+          previewText: livePreviewText.current,
+        });
         const silenceFinished = autoProcessOnSilence && heardVoice.current &&
           context.currentTime - lastVoiceAt.current >= finishDelaySeconds;
         const noSpeechTimeout = !heardVoice.current && elapsedSeconds >= 15;
-        const safetyLimit = elapsedSeconds >= 75;
+        const safetyLimit = elapsedSeconds >= MAX_AUTOMATIC_RECORDING_SECONDS;
         if (recordingPurposeRef.current === purpose && (silenceFinished || noSpeechTimeout || safetyLimit)) {
           if (silenceTimer.current) window.clearInterval(silenceTimer.current);
           silenceTimer.current = undefined;
@@ -1420,8 +1428,8 @@ export function VoiceOrderConsole() {
                   disabled={Boolean(recording)}
                   onChange={(event) => setAutoProcessOnSilence(event.target.checked)}
                 />
-                Automatisch afronden na stilte · definitief binnen 5 seconden
-                <small>Na 1,6–1,9 seconden echte stilte boven het gemeten ruisniveau</small>
+                Automatisch afronden na een natuurlijke pauze
+                <small>Na 3–5 seconden echte stilte · handmatig stoppen verwerkt meteen</small>
               </label>
               </div>
             )}
