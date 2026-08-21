@@ -18,6 +18,35 @@ export interface UserFacingVoiceError {
   retryable: boolean;
 }
 
+export class VoicePipelineError extends Error {
+  readonly code?: string;
+  readonly status?: number;
+  readonly endpoint?: string;
+  readonly serverReference?: string;
+
+  constructor(input: { message?: string; code?: string; status?: number; endpoint?: string; serverReference?: string }) {
+    super(input.message || "Voice pipeline request failed.");
+    this.name = "VoicePipelineError";
+    this.code = input.code;
+    this.status = input.status;
+    this.endpoint = input.endpoint;
+    this.serverReference = input.serverReference;
+  }
+}
+
+export function voicePipelineErrorDetails(error: unknown): {
+  message?: string;
+  code?: string;
+  status?: number;
+  endpoint?: string;
+  serverReference?: string;
+} {
+  if (error instanceof VoicePipelineError) {
+    return { message: error.message, code: error.code, status: error.status, endpoint: error.endpoint, serverReference: error.serverReference };
+  }
+  return { message: error instanceof Error ? error.message : undefined };
+}
+
 const ERROR_MESSAGES: Partial<Record<string, UserFacingVoiceError>> = {
   TRANSCRIPTION_BUDGET_EXCEEDED: {
     code: "TRANSCRIPTION_BUDGET_EXCEEDED",

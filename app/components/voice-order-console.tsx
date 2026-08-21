@@ -67,7 +67,20 @@ import {
   VoicePerformanceTrace,
   type VoicePerformanceSample,
 } from "@/src/analytics/voice-performance";
-import { userFacingVoiceError } from "@/src/ui/voice-errors";
+import {
+  VoicePipelineError,
+  userFacingVoiceError,
+  voicePipelineErrorDetails,
+} from "@/src/ui/voice-errors";
+import {
+  ERROR_REGISTRY_UPDATED_EVENT,
+  appendErrorIncident,
+  createErrorIncident,
+  formatErrorIncident,
+  parseErrorIncidents,
+  type ErrorIncident,
+  type ErrorPhase,
+} from "@/src/ui/error-registry";
 import {
   draftRevision,
   isAbortError,
@@ -95,6 +108,7 @@ interface MenuResponse {
 interface ApiFailure {
   error?: string;
   code?: string;
+  diagnosticId?: string;
 }
 
 type ReviewActivityPhase = "listening" | "transcribing" | "interpreting" | "updated" | "unchanged" | "error";
@@ -231,6 +245,8 @@ export function VoiceOrderConsole() {
   const [shiftMode, setShiftMode] = useState(false);
   const [speechWarmupState, setSpeechWarmupState] = useState<LocalSpeechWarmupState>("idle");
   const [error, setError] = useState<string>();
+  const [errorIncident, setErrorIncident] = useState<ErrorIncident>();
+  const [errorCopyStatus, setErrorCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const [audioLevel, setAudioLevel] = useState(0);
   const [tableEvents, setTableEvents] = useState<TableMemoryEvent[]>([]);
   const [, setLatestActions] = useState<PlannedOrderAction[]>([]);
@@ -243,7 +259,7 @@ export function VoiceOrderConsole() {
   const [livePreviewGuidance, setLivePreviewGuidance] = useState<string>();
   const [provisionalProducts, setProvisionalProducts] = useState<Array<{ id: string; name: string }>>([]);
   const [provisionalDraft, setProvisionalDraft] = useState<DraftOrder>();
-  const [, setVoicePhase] = useState<VoicePhase>("IDLE");
+  const [voicePhase, setVoicePhase] = useState<VoicePhase>("IDLE");
   const [, setPerformanceSamples] = useState<VoicePerformanceSample[]>([]);
   const recordingStream = useRef<MediaStream | undefined>(undefined);
   const audioContext = useRef<AudioContext | undefined>(undefined);
@@ -282,6 +298,8 @@ export function VoiceOrderConsole() {
   const performanceTrace = useRef<VoicePerformanceTrace | undefined>(undefined);
   const draftRef = useRef<DraftOrder | undefined>(undefined);
   const tableIdRef = useRef(tableId);
+  const speechModeRef = useRef<SpeechMode>(speechMode);
+  const voicePhaseRef = useRef<VoicePhase>(voicePhase);
 
   const menu = menuResponse?.menu;
   const selectedTable = menu?.tables.find((table) => table.id === tableId);
@@ -346,6 +364,74 @@ export function VoiceOrderConsole() {
     draftRevision: draftRevision(draftRef.current),
   }), []);
 
+  const registerVoiceError = useCallback((
+    reason: unknown,
+    context: {
+      phase: ErrorPhase;
+      operation?: VoiceOperationToken;
+      code?: string;
+      status?: number;
+      endpoint?: string;
+      title?: string;
+      fallback?: string;
+    },
+  ) => {
+    const inherited = voicePipelineErrorDetails(reason);
+    const code = context.code ?? inherited.code;
+    const status = context.status ?? inherited.status;
+    const endpoint = context.endpoint ?? inherited.endpoint;
+    const friendly = userFacingVoiceError({
+      code,
+      status,
+      message: inherited.message,
+      fallback: context.fallback,
+    });
+    const incident = createErrorIncident({
+      friendly,
+      code,
+      status,
+      endpoint,
+      serverReference: inherited.serverReference,
+      phase: context.phase,
+      elapsedMs: context.operation ? performance.now() - context.operation.startedAtMs : undefined,
+      runtime: window.serviceEarsDesktop ? "desktop" : "browser",
+      online: navigator.onLine,
+      speechMode: speechModeRef.current,
+      voicePhase: voicePhaseRef.current,
+    });
+    try {
+      const incidents = appendErrorIncident(
+        parseErrorIncidents(localStorage.getItem(LOCAL_STORAGE_KEYS.errorRegistry)),
+        incident,
+      );
+      localStorage.setItem(LOCAL_STORAGE_KEYS.errorRegistry, JSON.stringify(incidents));
+      window.dispatchEvent(new Event(ERROR_REGISTRY_UPDATED_EVENT));
+    } catch {
+      // Error presentation must remain available when browser storage is disabled or full.
+    }
+    setError(friendly.message);
+    setErrorIncident(incident);
+    setErrorCopyStatus("idle");
+    setReviewActivity({ phase: "error", title: context.title ?? friendly.title, detail: friendly.message });
+    return friendly;
+  }, []);
+
+  const clearVisibleError = useCallback(() => {
+    setError(undefined);
+    setErrorIncident(undefined);
+    setErrorCopyStatus("idle");
+  }, []);
+
+  const copyCurrentErrorReport = useCallback(async () => {
+    if (!errorIncident) return;
+    try {
+      await navigator.clipboard.writeText(formatErrorIncident(errorIncident));
+      setErrorCopyStatus("copied");
+    } catch {
+      setErrorCopyStatus("error");
+    }
+  }, [errorIncident]);
+
   const requestProvisionalReview = useCallback((
     rawText: string,
     operation: VoiceOperationToken,
@@ -406,6 +492,14 @@ export function VoiceOrderConsole() {
   }, [contextProductIds, dialectProfile, learningState, mayCommitOperation, menu, selectedTable]);
 
   useEffect(() => {
+    speechModeRef.current = speechMode;
+  }, [speechMode]);
+
+  useEffect(() => {
+    voicePhaseRef.current = voicePhase;
+  }, [voicePhase]);
+
+  useEffect(() => {
     const hydrateTimer = window.setTimeout(() => {
       const BrowserRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
       setSpeechMode(window.serviceEarsDesktop ? "offline" : BrowserRecognition ? "browser" : "unavailable");
@@ -440,14 +534,24 @@ export function VoiceOrderConsole() {
 
     void fetch("/api/menu")
       .then(async (response) => {
-        if (!response.ok) throw new Error("Menu refresh failed; cached menu remains active.");
+        if (!response.ok) throw new VoicePipelineError({
+          code: "MENU_LOAD_FAILED",
+          status: response.status,
+          message: "De actuele menukaart kon niet worden geladen; de lokale cache blijft actief.",
+          endpoint: "/api/menu",
+        });
         return (await response.json()) as MenuResponse;
       })
       .then((result) => {
         setMenuResponse(result);
         localStorage.setItem("service-ears:menu", JSON.stringify(result));
       })
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : "Menu unavailable."));
+      .catch((reason: unknown) => registerVoiceError(reason, {
+        phase: "menu",
+        code: "MENU_LOAD_FAILED",
+        endpoint: "/api/menu",
+        fallback: "De actuele menukaart kon niet worden geladen; de lokale cache blijft actief.",
+      }));
     void fetch("/api/health")
       .then(async (response) => response.ok ? response.json() as Promise<{
         offlineSpeechConfigured?: boolean;
@@ -467,7 +571,7 @@ export function VoiceOrderConsole() {
     return () => {
       window.clearTimeout(hydrateTimer);
     };
-  }, []);
+  }, [registerVoiceError]);
 
   useEffect(() => () => {
     operationCoordinator.current.cancel();
@@ -539,7 +643,7 @@ export function VoiceOrderConsole() {
     setBusy(true);
     setVoicePhase("INTERPRETING");
     performanceTrace.current?.mark("interpretation-start", performance.now());
-    setError(undefined);
+    clearVisibleError();
     setReviewActivity({
       phase: "interpreting",
       title: source === "audio" ? "Spraak begrijpen" : "Bestelling begrijpen",
@@ -585,7 +689,13 @@ export function VoiceOrderConsole() {
         duplicateIgnored?: boolean;
       } & ApiFailure;
       if (!response.ok || !result.draft) {
-        throw new Error(userFacingVoiceError({ code: result.code, status: response.status, message: result.error }).message);
+        throw new VoicePipelineError({
+          code: result.code,
+          status: response.status,
+          message: result.error,
+          endpoint: "/api/interpret",
+          serverReference: result.diagnosticId,
+        });
       }
       if (result.operationId !== operation.id || result.tableId !== operation.tableId || result.baseDraftRevision !== operation.baseDraftRevision) {
         finishOperation(operation, "cancelled", "CANCELLED");
@@ -643,12 +753,10 @@ export function VoiceOrderConsole() {
       finishOperation(operation, "ready", "READY_FOR_REVIEW");
     } catch (reason) {
       if (isAbortError(reason) || !operationCoordinator.current.isActive(operation)) return;
-      const friendly = userFacingVoiceError({ message: reason instanceof Error ? reason.message : undefined });
-      setError(friendly.message);
-      setReviewActivity({ phase: "error", title: friendly.title, detail: friendly.message });
+      registerVoiceError(reason, { phase: "interpretation", operation, endpoint: "/api/interpret" });
       finishOperation(operation, "error", "ERROR");
     }
-  }, [beginOperation, commitDraft, contextProductIds, dialectProfile, finishOperation, learningState, mayCommitOperation, menu, selectedTable, tableEvents]);
+  }, [beginOperation, clearVisibleError, commitDraft, contextProductIds, dialectProfile, finishOperation, learningState, mayCommitOperation, menu, registerVoiceError, selectedTable, tableEvents]);
 
   const applyCorrection = useCallback(async (text: string, operation?: VoiceOperationToken) => {
     if (!draft || !text.trim()) return;
@@ -668,7 +776,7 @@ export function VoiceOrderConsole() {
     setBusy(true);
     setVoicePhase("LOCAL_TRANSCRIBING");
     performanceTrace.current?.mark("transcription-start", performance.now());
-    setError(undefined);
+    clearVisibleError();
     setReviewActivity({
       phase: "transcribing",
       title: purpose === "correction" ? "Correctie uitschrijven" : "Spraak uitschrijven",
@@ -724,7 +832,13 @@ export function VoiceOrderConsole() {
         };
       } & ApiFailure;
       if (!response.ok || !result.turns || !result.text) {
-        throw new Error(userFacingVoiceError({ code: result.code, status: response.status, message: result.error }).message);
+        throw new VoicePipelineError({
+          code: result.code,
+          status: response.status,
+          message: result.error,
+          endpoint: "/api/transcribe",
+          serverReference: result.diagnosticId,
+        });
       }
       if (result.operationId !== operation.id || result.tableId !== operation.tableId || result.baseDraftRevision !== operation.baseDraftRevision) {
         finishOperation(operation, "cancelled", "CANCELLED");
@@ -769,22 +883,22 @@ export function VoiceOrderConsole() {
       }
     } catch (reason) {
       if (isAbortError(reason) || !operationCoordinator.current.isActive(operation)) return;
-      const friendly = userFacingVoiceError({ message: reason instanceof Error ? reason.message : undefined });
-      setError(friendly.message);
-      setReviewActivity({ phase: "error", title: friendly.title, detail: friendly.message });
+      registerVoiceError(reason, { phase: "transcription", operation, endpoint: "/api/transcribe" });
       finishOperation(operation, "error", "ERROR");
     }
-  }, [applyCorrection, contextProductIds, dialectProfile, draft, finishOperation, interpretTurns, learningState, mayCommitOperation, speechLanguage]);
+  }, [applyCorrection, clearVisibleError, contextProductIds, dialectProfile, draft, finishOperation, interpretTurns, learningState, mayCommitOperation, registerVoiceError, speechLanguage]);
 
   const finishBrowserRecognition = useCallback(async (purpose: "conversation" | "correction", text: string, operation: VoiceOperationToken) => {
     if (!operationCoordinator.current.isActive(operation)) return;
     const recognizedText = text.trim();
     if (!recognizedText) {
-      setError("Geen spraak herkend. Probeer opnieuw en spreek iets dichter bij de microfoon.");
-      setReviewActivity({
-        phase: "error",
-        title: "Review niet bijgewerkt",
-        detail: "Geen spraak herkend. Probeer opnieuw en spreek iets dichter bij de microfoon.",
+      registerVoiceError(new VoicePipelineError({
+        code: "NO_SPEECH_DETECTED",
+        message: "Geen spraak herkend. Probeer opnieuw en spreek iets dichter bij de microfoon.",
+      }), {
+        phase: "browser-speech",
+        operation,
+        code: "NO_SPEECH_DETECTED",
       });
       finishOperation(operation, "error", "ERROR");
       return;
@@ -797,12 +911,19 @@ export function VoiceOrderConsole() {
     setSpeechInsight("De beste Edge-transcriptie is gekozen met het menu en de huidige tafelcontext.");
     setTranscript(formatTurns(turns));
     await interpretTurns(turns, "audio", draft?.lines, operation);
-  }, [applyCorrection, draft, finishOperation, interpretTurns]);
+  }, [applyCorrection, draft, finishOperation, interpretTurns, registerVoiceError]);
 
   const startBrowserRecording = (purpose: "conversation" | "correction", operation: VoiceOperationToken) => {
     const BrowserRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!BrowserRecognition) {
-      setError("Browser-spraakherkenning is niet beschikbaar. Open deze testversie in Microsoft Edge.");
+      registerVoiceError(new VoicePipelineError({
+        code: "BROWSER_SPEECH_UNAVAILABLE",
+        message: "Browser-spraakherkenning is niet beschikbaar. Gebruik de geïnstalleerde lokale versie of Microsoft Edge.",
+      }), {
+        phase: "browser-speech",
+        operation,
+        code: "BROWSER_SPEECH_UNAVAILABLE",
+      });
       finishOperation(operation, "error", "ERROR");
       return;
     }
@@ -856,7 +977,14 @@ export function VoiceOrderConsole() {
           : event.error === "no-speech"
             ? "Geen duidelijke spraak gehoord. Probeer opnieuw en spreek iets dichter bij de microfoon."
           : `Spraakherkenning stopte: ${event.message || event.error}.`;
-      setError(explanation);
+      registerVoiceError(new VoicePipelineError({
+        code: event.error === "not-allowed" ? "MICROPHONE_DENIED" : "BROWSER_SPEECH_FAILED",
+        message: explanation,
+      }), {
+        phase: "browser-speech",
+        operation,
+        code: event.error === "not-allowed" ? "MICROPHONE_DENIED" : "BROWSER_SPEECH_FAILED",
+      });
     };
     recognition.onend = () => {
       if (browserRecognitionStopTimer.current) window.clearTimeout(browserRecognitionStopTimer.current);
@@ -872,7 +1000,7 @@ export function VoiceOrderConsole() {
         finishOperation(operation, "error", "ERROR");
         return;
       }
-      if (recognizedText) setError(undefined);
+      if (recognizedText) clearVisibleError();
       void finishBrowserRecognition(purpose, recognizedText, operation);
     };
     browserRecognition.current = recognition;
@@ -1030,7 +1158,7 @@ export function VoiceOrderConsole() {
 
   const startRecording = async (purpose: "conversation" | "correction") => {
     const operation = beginOperation(purpose);
-    setError(undefined);
+    clearVisibleError();
     setSpeechInsight(undefined);
     setLivePreviewGuidance(undefined);
     setReviewActivity({
@@ -1108,13 +1236,13 @@ export function VoiceOrderConsole() {
         }
       }, 250);
     } catch (reason) {
-      const friendly = userFacingVoiceError({
+      registerVoiceError(reason, {
+        phase: "microphone",
+        operation,
         code: "MICROPHONE_DENIED",
-        message: reason instanceof Error ? reason.message : undefined,
+        title: "Microfoon niet beschikbaar",
         fallback: "Microfoontoegang is geweigerd.",
       });
-      setError(friendly.message);
-      setReviewActivity({ phase: "error", title: "Microfoon niet beschikbaar", detail: friendly.message });
       finishOperation(operation, "error", "ERROR");
     }
   };
@@ -1156,11 +1284,13 @@ export function VoiceOrderConsole() {
       if (!heardVoice.current || recordingChunks.current.length === 0) {
         setRecording(undefined);
         setAudioLevel(0);
-        setError("Geen duidelijke spraak gehoord. De lege opname is niet verwerkt; probeer opnieuw en spreek iets dichter bij de microfoon.");
-        setReviewActivity({
-          phase: "error",
-          title: "Review niet bijgewerkt",
-          detail: "Geen duidelijke spraak gehoord. Spreek iets dichter bij de microfoon en probeer opnieuw.",
+        registerVoiceError(new VoicePipelineError({
+          code: "NO_SPEECH_DETECTED",
+          message: "Geen duidelijke spraak gehoord. De lege opname is niet verwerkt; probeer opnieuw en spreek iets dichter bij de microfoon.",
+        }), {
+          phase: "microphone",
+          operation,
+          code: "NO_SPEECH_DETECTED",
         });
         finishOperation(operation, "error", "ERROR");
         return;
@@ -1174,11 +1304,13 @@ export function VoiceOrderConsole() {
       if (!preparation.speechDetected) {
         setRecording(undefined);
         setAudioLevel(0);
-        setError("Alleen omgevingsgeluid gehoord. De opname is niet naar het spraakmodel gestuurd.");
-        setReviewActivity({
-          phase: "error",
-          title: "Review niet bijgewerkt",
-          detail: "Alleen omgevingsgeluid gehoord; er is bewust niets aan de bestelling veranderd.",
+        registerVoiceError(new VoicePipelineError({
+          code: "AUDIO_ONLY_NOISE",
+          message: "Alleen omgevingsgeluid gehoord; er is bewust niets aan de bestelling veranderd.",
+        }), {
+          phase: "audio-finalization",
+          operation,
+          code: "AUDIO_ONLY_NOISE",
         });
         finishOperation(operation, "error", "ERROR");
         return;
@@ -1190,9 +1322,11 @@ export function VoiceOrderConsole() {
       await uploadRecording(blob, purpose, operation, audioQuality, browserPreview, browserPreviewFinal, preparation);
     } catch (reason) {
       setRecording(undefined);
-      const message = reason instanceof Error ? reason.message : "De opname kon niet worden verwerkt.";
-      setError(message);
-      setReviewActivity({ phase: "error", title: "Review niet bijgewerkt", detail: message });
+      registerVoiceError(reason, {
+        phase: "audio-finalization",
+        operation,
+        fallback: "De opname kon niet worden verwerkt.",
+      });
       finishOperation(operation, "error", "ERROR");
     } finally {
       recordingStream.current = undefined;
@@ -1214,7 +1348,7 @@ export function VoiceOrderConsole() {
     const operation = beginOperation("send");
     setBusy(true);
     setVoicePhase("SENDING");
-    setError(undefined);
+    clearVisibleError();
     try {
       const response = await fetch("/api/pos/drafts", {
         method: "POST",
@@ -1236,7 +1370,13 @@ export function VoiceOrderConsole() {
         baseDraftRevision?: string;
       } & ApiFailure;
       if (!response.ok || !result.draft) {
-        throw new Error(userFacingVoiceError({ code: result.code, status: response.status, message: result.error }).message);
+        throw new VoicePipelineError({
+          code: result.code,
+          status: response.status,
+          message: result.error,
+          endpoint: "/api/pos/drafts",
+          serverReference: result.diagnosticId,
+        });
       }
       if (result.operationId !== operation.id || result.tableId !== operation.tableId || result.baseDraftRevision !== operation.baseDraftRevision) {
         finishOperation(operation, "cancelled", "CANCELLED");
@@ -1253,7 +1393,12 @@ export function VoiceOrderConsole() {
           cache: "no-store",
         });
         if (!confirmation.ok) {
-          throw new Error("De POS-overdracht kon niet worden teruggelezen. Het concept blijft lokaal zichtbaar voor controle.");
+          throw new VoicePipelineError({
+            code: "POS_READBACK_FAILED",
+            status: confirmation.status,
+            message: "De POS-overdracht kon niet worden teruggelezen. Het concept blijft lokaal zichtbaar voor controle.",
+            endpoint: "/api/pos/drafts",
+          });
         }
       }
       if (!mayCommitOperation(operation)) {
@@ -1273,9 +1418,7 @@ export function VoiceOrderConsole() {
     } catch (reason) {
       if (isAbortError(reason) || !operationCoordinator.current.isActive(operation)) return;
       setDraft((current) => current ? { ...current, status: "ERROR", updatedAt: new Date().toISOString() } : current);
-      const friendly = userFacingVoiceError({ message: reason instanceof Error ? reason.message : undefined });
-      setError(friendly.message);
-      setReviewActivity({ phase: "error", title: friendly.title, detail: friendly.message });
+      registerVoiceError(reason, { phase: "pos", operation, endpoint: "/api/pos/drafts" });
       finishOperation(operation, "error", "ERROR");
     }
   };
@@ -1427,7 +1570,31 @@ export function VoiceOrderConsole() {
           {reviewActivity && (
             <div className={`review-activity review-activity-${reviewActivity.phase}`} role="status" aria-live="polite">
               <span className="review-activity-indicator" aria-hidden="true" />
-              <div><strong>{reviewActivity.title}</strong><p>{reviewActivity.detail}</p></div>
+              <div className="review-activity-content">
+                <strong>{reviewActivity.title}</strong>
+                <p>{reviewActivity.detail}</p>
+                {reviewActivity.phase === "error" && errorIncident && (
+                  <details className="technical-error-details" open>
+                    <summary>Technische uitleg · {errorIncident.reference}</summary>
+                    <p>{errorIncident.explanation}</p>
+                    <dl>
+                      <div><dt>Code</dt><dd>{errorIncident.code}</dd></div>
+                      <div><dt>Fase</dt><dd>{errorIncident.phase}</dd></div>
+                      {errorIncident.status && <div><dt>HTTP</dt><dd>{errorIncident.status}</dd></div>}
+                      {errorIncident.serverReference && <div><dt>Server</dt><dd>{errorIncident.serverReference}</dd></div>}
+                      {typeof errorIncident.elapsedMs === "number" && <div><dt>Duur</dt><dd>{errorIncident.elapsedMs} ms</dd></div>}
+                    </dl>
+                    <ul>{errorIncident.suggestedChecks.map((check) => <li key={check}>{check}</li>)}</ul>
+                    <button type="button" className="small-button" onClick={() => void copyCurrentErrorReport()}>
+                      Technisch rapport kopiëren
+                    </button>
+                    <small aria-live="polite">
+                      {errorCopyStatus === "copied" && "Gekopieerd — plak dit rapport in Codex."}
+                      {errorCopyStatus === "error" && "Kopiëren lukte niet; gebruik het register onder Instellingen."}
+                    </small>
+                  </details>
+                )}
+              </div>
             </div>
           )}
 

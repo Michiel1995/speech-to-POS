@@ -4,6 +4,7 @@ export const LOCAL_STORAGE_KEYS = {
   context: "service-ears:context-by-table",
   events: "service-ears:events-by-table:v2",
   languageLearning: "service-ears:language-learning:v2",
+  errorRegistry: "service-ears:error-registry:v1",
   backupRollback: "service-ears:backup-rollback:v1",
 } as const;
 

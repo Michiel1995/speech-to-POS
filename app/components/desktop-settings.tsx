@@ -3,6 +3,13 @@
 import { useEffect, useState } from "react";
 
 import { formatPrivacySafeDiagnostics } from "@/src/ui/diagnostics";
+import {
+  ERROR_REGISTRY_UPDATED_EVENT,
+  formatErrorRegistry,
+  parseErrorIncidents,
+  type ErrorIncident,
+} from "@/src/ui/error-registry";
+import { LOCAL_STORAGE_KEYS } from "@/src/memory/storage-keys";
 
 const VOICE_PERFORMANCE_KEY = "service-ears:voice-performance:v1";
 
@@ -69,6 +76,7 @@ export function DesktopSettings({
   const [open, setOpen] = useState(false);
   const [serverError, setServerError] = useState<string>();
   const [diagnosticsStatus, setDiagnosticsStatus] = useState<"idle" | "copying" | "copied" | "error">("idle");
+  const [errorIncidents, setErrorIncidents] = useState<ErrorIncident[]>([]);
 
   useEffect(() => {
     const bridge = window.serviceEarsDesktop;
@@ -86,6 +94,23 @@ export function DesktopSettings({
       })
       .catch(() => { /* the main console reports server availability */ });
     return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    const refreshErrors = () => {
+      try {
+        setErrorIncidents(parseErrorIncidents(localStorage.getItem(LOCAL_STORAGE_KEYS.errorRegistry)));
+      } catch {
+        setErrorIncidents([]);
+      }
+    };
+    refreshErrors();
+    window.addEventListener(ERROR_REGISTRY_UPDATED_EVENT, refreshErrors);
+    window.addEventListener("storage", refreshErrors);
+    return () => {
+      window.removeEventListener(ERROR_REGISTRY_UPDATED_EVENT, refreshErrors);
+      window.removeEventListener("storage", refreshErrors);
+    };
   }, []);
 
   const copyDiagnostics = async () => {
@@ -116,12 +141,24 @@ export function DesktopSettings({
       },
       health: currentHealth,
       performanceJson: localStorage.getItem(VOICE_PERFORMANCE_KEY),
+      errorRegistryJson: localStorage.getItem(LOCAL_STORAGE_KEYS.errorRegistry),
       serverErrorPresent: Boolean(serverError || !currentHealth?.ok),
     });
 
     try {
       if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
       await navigator.clipboard.writeText(report);
+      setDiagnosticsStatus("copied");
+    } catch {
+      setDiagnosticsStatus("error");
+    }
+  };
+
+  const copyErrorRegistry = async () => {
+    setDiagnosticsStatus("copying");
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard API unavailable");
+      await navigator.clipboard.writeText(formatErrorRegistry(errorIncidents));
       setDiagnosticsStatus("copied");
     } catch {
       setDiagnosticsStatus("error");
@@ -195,10 +232,31 @@ export function DesktopSettings({
               </div>
             </>}
             {serverError && <p className="settings-error">{serverError}</p>}
+            <div className="error-registry-panel">
+              <div className="error-registry-heading">
+                <div>
+                  <strong>Technisch foutenregister</strong>
+                  <span>{errorIncidents.length === 0 ? "Nog geen fouten geregistreerd" : `${errorIncidents.length} lokale fout${errorIncidents.length === 1 ? "" : "en"} bewaard`}</span>
+                </div>
+                <button
+                  type="button"
+                  className="secondary-button diagnostics-button"
+                  disabled={diagnosticsStatus === "copying" || errorIncidents.length === 0}
+                  onClick={() => void copyErrorRegistry()}
+                >Register kopiëren</button>
+              </div>
+              {errorIncidents.slice(0, 3).map((incident) => (
+                <div className="error-registry-row" key={incident.reference}>
+                  <code>{incident.reference}</code>
+                  <div><strong>{incident.code}</strong><span>{incident.component} · {new Date(incident.occurredAt).toLocaleString("nl-BE")}</span></div>
+                </div>
+              ))}
+              <small>Alleen technische metadata; nooit audio, transcript, bestelling, tafelnummer of operation-id.</small>
+            </div>
             <div className="diagnostics-panel">
               <div>
                 <strong>Hulp nodig?</strong>
-                <span>Kopieer technische status zonder audio, transcript, bestelling of tafelgegevens.</span>
+                <span>Kopieer technische status en het recente foutenregister zonder audio, transcript, bestelling of tafelgegevens.</span>
               </div>
               <button
                 type="button"
@@ -206,7 +264,7 @@ export function DesktopSettings({
                 disabled={diagnosticsStatus === "copying"}
                 onClick={() => void copyDiagnostics()}
               >
-                {diagnosticsStatus === "copying" ? "Controleren…" : "Diagnose kopiëren"}
+                {diagnosticsStatus === "copying" ? "Controleren…" : "Diagnose + fouten kopiëren"}
               </button>
             </div>
             <p className={`diagnostics-status ${diagnosticsStatus === "error" ? "is-error" : ""}`} aria-live="polite">

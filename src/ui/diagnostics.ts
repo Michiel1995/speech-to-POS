@@ -2,6 +2,7 @@ import {
   parseVoicePerformanceSamples,
   summarizeVoicePerformance,
 } from "@/src/analytics/voice-performance";
+import { parseErrorIncidents } from "@/src/ui/error-registry";
 
 export interface DiagnosticsHealth {
   ok?: boolean;
@@ -50,6 +51,7 @@ export interface DiagnosticsInput {
   language?: string;
   viewport?: { width: number; height: number; devicePixelRatio: number };
   performanceJson?: string | null;
+  errorRegistryJson?: string | null;
   serverErrorPresent?: boolean;
 }
 
@@ -70,9 +72,10 @@ export function buildPrivacySafeDiagnostics(input: DiagnosticsInput) {
   const device = speech?.device;
   const performance = summarizeVoicePerformance(parseVoicePerformanceSamples(input.performanceJson ?? null));
   const installedModels = speech?.installedModels ?? [];
+  const errorIncidents = parseErrorIncidents(input.errorRegistryJson).slice(0, 10);
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     generatedAt: input.generatedAt,
     product: "Service Ears",
     app: {
@@ -128,6 +131,25 @@ export function buildPrivacySafeDiagnostics(input: DiagnosticsInput) {
       stopToReviewP50Ms: performance.stopToReviewP50Ms,
       stopToReviewP95Ms: performance.stopToReviewP95Ms,
       errorRate: Math.round(performance.errorRate * 10_000) / 10_000,
+    },
+    errors: {
+      registered: parseErrorIncidents(input.errorRegistryJson).length,
+      recent: errorIncidents.map((incident) => ({
+        reference: incident.reference,
+        fingerprint: incident.fingerprint,
+        occurredAt: incident.occurredAt,
+        code: incident.code,
+        phase: incident.phase,
+        component: incident.component,
+        status: incident.status,
+        endpoint: incident.endpoint,
+        serverReference: incident.serverReference,
+        elapsedMs: incident.elapsedMs,
+        runtime: incident.runtime,
+        online: incident.online,
+        speechMode: incident.speechMode,
+        voicePhase: incident.voicePhase,
+      })),
     },
     privacy: {
       containsAudio: false,

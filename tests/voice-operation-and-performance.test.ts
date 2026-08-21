@@ -6,7 +6,11 @@ import {
   summarizeVoicePerformance,
   VoicePerformanceTrace,
 } from "@/src/analytics/voice-performance";
-import { userFacingVoiceError } from "@/src/ui/voice-errors";
+import {
+  VoicePipelineError,
+  userFacingVoiceError,
+  voicePipelineErrorDetails,
+} from "@/src/ui/voice-errors";
 import { VoiceOperationCoordinator } from "@/src/ui/voice-operation";
 import { InterpretRequestSchema } from "@/src/domain/schemas";
 import { MockPOSAdapter } from "@/src/pos/mock-adapter";
@@ -115,6 +119,23 @@ describe("privacy-safe latency metrics", () => {
 });
 
 describe("typed user-facing errors", () => {
+  it("keeps API code, status and server reference intact until Review", () => {
+    const error = new VoicePipelineError({
+      message: "budget",
+      code: "TRANSCRIPTION_BUDGET_EXCEEDED",
+      status: 504,
+      endpoint: "/api/transcribe",
+      serverReference: "SRV-20260821153000-ABC123",
+    });
+    expect(voicePipelineErrorDetails(error)).toEqual({
+      message: "budget",
+      code: "TRANSCRIPTION_BUDGET_EXCEEDED",
+      status: 504,
+      endpoint: "/api/transcribe",
+      serverReference: "SRV-20260821153000-ABC123",
+    });
+  });
+
   it("explains a local timeout without making Edge a requirement", () => {
     expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED", status: 504 })).toMatchObject({
       title: "Opname niet volledig herkend",

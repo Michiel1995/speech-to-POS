@@ -4,6 +4,8 @@ import {
   buildPrivacySafeDiagnostics,
   formatPrivacySafeDiagnostics,
 } from "@/src/ui/diagnostics";
+import { createErrorIncident } from "@/src/ui/error-registry";
+import { userFacingVoiceError } from "@/src/ui/voice-errors";
 
 const health = {
   ok: true,
@@ -49,14 +51,25 @@ describe("privacy-safe diagnostics", () => {
         stopToReviewMs: 2_000,
         createdAt: "2026-08-15T00:59:00.000Z",
       }]),
+      errorRegistryJson: JSON.stringify([createErrorIncident({
+        friendly: userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }),
+        code: "TRANSCRIPTION_BUDGET_EXCEEDED",
+        phase: "transcription",
+        endpoint: "/api/transcribe",
+        runtime: "desktop",
+        online: false,
+        now: new Date("2026-08-15T00:58:00.000Z"),
+        referenceSuffix: "ERR001",
+      })]),
     });
 
     expect(report).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       app: { version: "0.3.5", runtime: "desktop", online: false },
       server: { ready: true, adapter: "mock-pos", retention: "transient" },
       speech: { configured: true, installedModelCount: 2, eligibleModelCount: 2 },
       performance: { samples: 1, totalP50Ms: 2_500, stopToReviewP50Ms: 2_000 },
+      errors: { registered: 1, recent: [{ code: "TRANSCRIPTION_BUDGET_EXCEEDED", phase: "transcription" }] },
       privacy: { containsTranscript: false, containsOrders: false, containsOperationIds: false },
     });
     expect(JSON.stringify(report)).not.toContain("private-operation-id");
