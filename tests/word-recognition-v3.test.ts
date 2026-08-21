@@ -71,6 +71,23 @@ describe("Service Ears 3 word recognition", () => {
     ], demoMenu)).toBeUndefined();
   });
 
+  it("treats a noisy polite multi-product list as an order instead of unclear speech", () => {
+    const routed = routeIntent("Beetje een cola, een penche en de steek alsjeblieft.", { menu: demoMenu });
+
+    expect(routed.intent).toBe("order");
+    expect(routed.productIds).toEqual(expect.arrayContaining(["POS-1101", "POS-1002", "POS-3001"]));
+    expect(safeBrowserSpeechFallback([{
+      text: "Beetje een cola, een penche en de steek alsjeblieft.",
+      acousticConfidence: 0.74,
+    }], demoMenu)).toBeDefined();
+  });
+
+  it("does not turn a story containing several product names into an order", () => {
+    const routed = routeIntent("Mijn nonkel vertelde gisteren een verhaal over cola, Stella en steak.", { menu: demoMenu });
+
+    expect(routed.intent).toBe("non_order");
+  });
+
   it("uses the hard fast-final gate only for strong, explicit menu grounding", () => {
     expect(confidentBrowserSpeechFallback([
       { text: "Doe mij twee Duvel", acousticConfidence: 0.74 },

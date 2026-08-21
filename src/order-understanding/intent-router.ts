@@ -33,6 +33,7 @@ const QUESTION_START = /^(?:(?:en|awel|allee|zeg)\s+)?(?:zeg eens |vertel eens |
 const DIRECT_QUESTION_START = /^(?:could you tell me|can you tell me|tell me|qu[' ]est ce que|vous avez quoi|que proposez vous|on peut choisir)\b/;
 const MENU_SUBJECT = /\b(?:bier|bieren|wijn|wijnen|drank|dranken|drinken|boire|boisson|boissons|frisdrank|cocktail|koffie|voorgerecht|starter|starten|vooraf|entree|entrees|hoofdgerecht|gerecht|dessert|menu|kaart|eten|alcoholvrij|vegetarisch|vegan)\b/;
 const ORDER_CUE = /\b(?:ik neem|ik pak|ik ga voor|ik kies|ik wil|ik wou graag|wij nemen|we nemen|voor mij|voor ons|geef|doe|zet|breng|bestel|schrijf|voeg|mag ik|zou ik mogen|graag|laat maar komen|laat komen|je prends|pour moi|i'll have|i will have)\b/;
+const POLITE_REQUEST_CUE = /\b(?:alsjeblieft|alstublieft|aub|please|s il vous plait|s'il vous plait|svp)\b/;
 const ADDITION_CUE = /\b(?:erbij|daarbij|nog een|nog eentje|nog ene|ook een|voeg toe|doe er|zet er|schrijf er|extra|bijbestellen|voor mij ook|dezelfde nog|maak er nog|eentje meer)\b/;
 const REMOVAL_CUE = /\b(?:geen|gene|niet meer|toch niet|toch geen|hoef.*niet|moet.*niet hebben|laat.*zitten|laat.*vallen|laat.*steken|haal.*weg|doe.*weg|eruit|er uit|verwijder|schrap|annuleer|cancel|remove|supprime)\b/;
 const REPLACEMENT_CUE = /\b(?:in plaats van|vervang|verander .* naar|maak daar|wissel .* voor|change .* to|replace .* with)\b/;
@@ -60,11 +61,14 @@ export function routeIntent(
 ): RoutedIntent {
   const normalizedText = normalizeFlemish(text, options.dialectProfile ?? "auto");
   const startsAsQuestion = QUESTION_START.test(normalizedText) || DIRECT_QUESTION_START.test(normalizedText);
-  const productIds = options.menu
-    ? [...new Set(findProductMentions(normalizedText, options.menu, {
+  const productMentions = options.menu
+    ? findProductMentions(normalizedText, options.menu, {
       preferredProductIds: options.contextProductIds,
       existingProductIds: options.existingProductIds,
-    }).flatMap((mention) => mention.candidates.map((product) => product.id)))]
+    })
+    : [];
+  const productIds = options.menu
+    ? [...new Set(productMentions.flatMap((mention) => mention.candidates.map((product) => product.id)))]
     : [];
   const result = (intent: ConversationIntent, confidence: number, evidence: string[]): RoutedIntent => ({
     intent,
@@ -100,6 +104,14 @@ export function routeIntent(
   if (/^(?:ja|jazeker|zeker|inderdaad|ok|okay|graag|correct|oui|yes)\b/.test(normalizedText)) return result("answer", 0.9, ["affirmation"]);
   if (/^(?:nee|neen|no|non|liever niet|laat maar)\b/.test(normalizedText)) return result("refusal", 0.9, ["refusal"]);
   if (STORY_CUE.test(normalizedText) && !ORDER_CUE.test(normalizedText)) return result("non_order", 0.94, ["story-or-joke"]);
+  const tokenCount = normalizedText.split(" ").filter(Boolean).length;
+  const conciseProductList = productMentions.length >= 2 && tokenCount <= 5;
+  const politeProductList = productMentions.length >= 2 && POLITE_REQUEST_CUE.test(normalizedText) && tokenCount <= 18;
+  if (conciseProductList || politeProductList) {
+    return result(options.hasOrder ? "addition" : "order", politeProductList ? 0.95 : 0.9, [
+      politeProductList ? "polite-product-list" : "concise-product-list",
+    ]);
+  }
   if (ORDER_CUE.test(normalizedText) && (productIds.length > 0 || normalizedText.split(" ").length <= 12)) {
     return result(options.hasOrder ? "addition" : "order", productIds.length > 0 ? 0.96 : 0.66, ["order-cue"]);
   }

@@ -138,6 +138,35 @@ describe("hard voice latency and factuality route", () => {
     expect(review.draft.lines).toContainEqual(expect.objectContaining({ productId: "POS-1001", quantity: 2 }));
   });
 
+  it("recovers the noisy polite product list from the reported timeout into Review", async () => {
+    offlineTranscriber.mockRejectedValue(new DomainError("budget", "TRANSCRIPTION_BUDGET_EXCEEDED", 504));
+    const spoken = "Beetje een cola, een penche en de steek alsjeblieft.";
+    const response = await transcribePost(audioRequest(spoken, 0.74, false));
+    const body = await response.json() as { text?: string; engine?: string };
+
+    expect(response.ok).toBe(true);
+    expect(body).toMatchObject({ text: spoken, engine: "edge-live-budget-fallback" });
+
+    const reviewResponse = await interpretPost(new Request("http://localhost/api/interpret", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationId: "voice-noisy-list-recovery-test",
+        baseDraftRevision: "empty",
+        tenantId: "tenant-demo-brussels",
+        tableId: "TABLE-12",
+        tableLabel: "Table 12",
+        source: "audio",
+        turns: [{ speaker: "customer", text: body.text }],
+      }),
+    }));
+    const review = await reviewResponse.json() as { draft: { lines: Array<{ productId: string }> } };
+    const productIds = review.draft.lines.map((line) => line.productId);
+
+    expect(reviewResponse.ok).toBe(true);
+    expect(productIds).toEqual(expect.arrayContaining(["POS-1101", "POS-1002", "POS-3001"]));
+  });
+
   it("still refuses an ungrounded browser fragment after a local timeout", async () => {
     offlineTranscriber.mockRejectedValue(new DomainError("budget", "TRANSCRIPTION_BUDGET_EXCEEDED", 504));
     const response = await transcribePost(audioRequest("Mijn nonkel vertelde gisteren een lang verhaal", 0.9, false));
