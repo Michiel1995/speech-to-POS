@@ -6,7 +6,7 @@ import { MockPOSAdapter } from "@/src/pos/mock-adapter";
 import { answerMenuQuestion } from "@/src/order-understanding/menu-question";
 import { findProductMentions } from "@/src/semantic-menu/matcher";
 import { validateDraft } from "@/src/validation/order-validator";
-import { customer, interpret, waiter } from "@/tests/helpers";
+import { customer, interpret, interpretAudio, waiter } from "@/tests/helpers";
 
 describe("deterministic hospitality order engine", () => {
   it("produces the complete core demo without duplicating waiter confirmation", () => {
@@ -77,6 +77,106 @@ describe("deterministic hospitality order engine", () => {
     const first = interpret([customer("Een Duvel.")]);
     const second = interpret([customer("Welke bieren hebben jullie?")], first.lines);
     expect(second.lines).toMatchObject([{ productId: "POS-1001", quantity: 1 }]);
+  });
+
+  it.each([
+    "Een voorgerecht is niet meer nodig.",
+    "Het voorgerecht hoeft niet meer.",
+    "Laat de starter maar vallen.",
+    "Skip the starter.",
+  ])("removes the sole existing starter through a natural course reference: %s", (spoken) => {
+    const first = interpret([customer("Een garnaalkroket en een hamburger.")]);
+    const corrected = interpret([customer(spoken)], first.lines);
+
+    expect(corrected.lines.map((line) => line.productId)).toEqual(["POS-3006"]);
+    expect(corrected.issues).toHaveLength(0);
+  });
+
+  it("treats 'heb je voor mij' with named products as an order, not an availability question", () => {
+    const draft = interpret([customer("Heb je voor mij een pintje, een Duvel en een cola?")]);
+
+    expect(draft.lines.map((line) => line.productId).sort()).toEqual(["POS-1001", "POS-1002", "POS-1101"]);
+    expect(draft.issues).toHaveLength(0);
+  });
+
+  it("keeps a genuine 'heb je' availability question non-mutating", () => {
+    const draft = interpret([customer("Heb je nog Duvel beschikbaar?")]);
+
+    expect(draft.lines).toHaveLength(0);
+    expect(draft.issues).toHaveLength(0);
+  });
+
+  it("applies an acoustic self-correction inside a compound spoken order", () => {
+    const draft = interpret([customer(
+      "Heb je voor mij een pinch, een duvel, een cola of in plaats van een pintje doen maar een tweede dubbele.",
+    )]);
+
+    expect(draft.lines.map((line) => [line.productId, line.quantity]).sort()).toEqual([
+      ["POS-1001", 2],
+      ["POS-1101", 1],
+    ]);
+    expect(draft.issues).toHaveLength(0);
+  });
+
+  it("adds only the final choice after spoken deliberation and keeps ambiguous wine visible", () => {
+    const first = interpret([customer("Een garnaalkroket en een hamburger.")]);
+    const corrected = interpretAudio([customer(
+      "Wat zou ik erbij drinken? Misschien een cola of beter een pintje of een duvel goh of doe maar een glaasje witte wijn anders.",
+    )], first.lines);
+
+    expect(corrected.lines.map((line) => line.productId)).toEqual(["POS-2001", "POS-3006", "POS-1301"]);
+    expect(corrected.lines.map((line) => line.productId)).not.toEqual(expect.arrayContaining(["POS-1101", "POS-1002", "POS-1001"]));
+    expect(corrected.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "speech_confirmation",
+        blocking: true,
+        productCandidates: expect.arrayContaining([
+          expect.objectContaining({ productId: "POS-1301" }),
+          expect.objectContaining({ productId: "POS-1302" }),
+        ]),
+      }),
+    ]));
+  });
+
+  it.each([
+    ["Misschien een cola, nee, doe maar een Duvel.", "POS-1001"],
+    ["Ik twijfel tussen cola en Duvel. Uiteindelijk neem ik een Stella.", "POS-1002"],
+    ["Maybe a Coke or a beer, actually I'll have a Duvel.", "POS-1001"],
+    ["Peut etre un Coca ou une biere, finalement je prends un Duvel.", "POS-1001"],
+  ])("keeps only the explicit final decision after deliberation: %s", (spoken, expectedProductId) => {
+    const draft = interpret([customer(spoken)]);
+
+    expect(draft.lines.map((line) => line.productId)).toEqual([expectedProductId]);
+    expect(draft.issues).toHaveLength(0);
+  });
+
+  it.each([
+    "Misschien een cola of een Duvel, ik weet het nog niet.",
+    "Ik twijfel nog tussen een pintje en een Duvel.",
+    "Maybe a Coke or a Duvel, I have not decided yet.",
+  ])("does not order brainstormed alternatives without a final decision: %s", (spoken) => {
+    const draft = interpret([customer(spoken)]);
+
+    expect(draft.lines).toHaveLength(0);
+    expect(draft.issues).toMatchObject([{ type: "ambiguous_product", blocking: true }]);
+  });
+
+  it.each([
+    "Een cola of een Duvel.",
+    "Ik wil een cola of een Duvel.",
+    "Doe maar een cola of een Duvel.",
+  ])("asks for one choice instead of ordering every alternative: %s", (spoken) => {
+    const draft = interpret([customer(spoken)]);
+
+    expect(draft.lines).toHaveLength(0);
+    expect(draft.issues).toMatchObject([{
+      type: "ambiguous_product",
+      blocking: true,
+      productCandidates: expect.arrayContaining([
+        expect.objectContaining({ productId: "POS-1101" }),
+        expect.objectContaining({ productId: "POS-1001" }),
+      ]),
+    }]);
   });
 
   it("maps common speech recognition variants to safe Leffe choices", () => {

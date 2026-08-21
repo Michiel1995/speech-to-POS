@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { demoMenu } from "@/src/data/demo-menu";
 import { normalizeFlemish } from "@/src/language/flemish-dialect";
-import { routeIntent, routeUtterance, type ConversationIntent } from "@/src/order-understanding/intent-router";
+import { finalDecisionClause, routeIntent, routeUtterance, type ConversationIntent } from "@/src/order-understanding/intent-router";
 import { planOrderAction } from "@/src/order-understanding/order-actions";
 
 interface IntentCase {
@@ -58,5 +58,46 @@ describe("Service Ears 2.0 intent router corpus", () => {
     expect(route.productIds).toContain("POS-3006");
     expect(route.productIds).not.toContain("POS-3005");
     expect(action.summary).toBe("Vervangen: Hamburger");
+  });
+
+  it("distinguishes a product request for me from a real availability question", () => {
+    expect(routeIntent("Heb je voor mij een pintje en een Duvel?", { menu: demoMenu }).intent).toBe("order");
+    expect(routeIntent("Heb je nog Duvel beschikbaar?", { menu: demoMenu }).intent).toBe("availability_question");
+  });
+
+  it("routes only the decisive choice after natural spoken deliberation", () => {
+    const spoken = "Wat zou ik erbij drinken? Misschien cola of een pintje of doe maar een glaasje witte wijn anders.";
+
+    expect(finalDecisionClause(spoken)).toBe("doe maar een glaasje witte wijn");
+    const routes = routeUtterance(spoken, { menu: demoMenu, hasOrder: true });
+    expect(routes).toHaveLength(1);
+    expect(routes[0].intent).toBe("addition");
+    expect(routes[0].productIds).toEqual(expect.arrayContaining(["POS-1301", "POS-1302"]));
+    expect(routes[0].productIds).not.toEqual(expect.arrayContaining(["POS-1101", "POS-1002"]));
+  });
+
+  it("describes a course-level removal instead of generic conversation context", () => {
+    const route = routeIntent("Een voorgerecht is niet meer nodig.", { menu: demoMenu, hasOrder: true });
+
+    expect(route.intent).toBe("removal");
+    expect(planOrderAction(route, demoMenu).summary).toBe("Verwijderen: voorgerecht");
+  });
+
+  it("keeps undecided alternatives out of the order intent", () => {
+    const route = routeIntent("Misschien een cola of een Duvel, ik weet het nog niet.", { menu: demoMenu });
+
+    expect(route.intent).toBe("non_order");
+    expect(route.evidence).toContain("undecided-deliberation");
+  });
+
+  it("exposes a compound order and its self-correction as two clear actions", () => {
+    const routes = routeUtterance(
+      "Heb je voor mij een pinch, een Duvel en een cola of in plaats van het pintje doe maar een tweede dubbele.",
+      { menu: demoMenu, hasOrder: true },
+    );
+
+    expect(routes.map((route) => route.intent)).toEqual(["addition", "replacement"]);
+    expect(routes[0].productIds).toEqual(expect.arrayContaining(["POS-1002", "POS-1001", "POS-1101"]));
+    expect(routes[1].productIds).toEqual(expect.arrayContaining(["POS-1002", "POS-1001"]));
   });
 });

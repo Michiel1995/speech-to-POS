@@ -38,7 +38,16 @@ export function planOrderAction(route: RoutedIntent, menu?: TenantMenu): Planned
   const names = route.productIds
     .map((id) => menu?.products.find((product) => product.id === id)?.canonicalName)
     .filter((name): name is string => Boolean(name));
-  const label = names.length ? names.slice(0, 3).join(", ") : "gesprekscontext";
+  const courseLabel = /\b(?:voorgerecht(?:en)?|starter(?:s)?|entree(?:s)?)\b/.test(route.normalizedText)
+    ? "voorgerecht"
+    : /\b(?:hoofdgerecht(?:en)?|main course|plat principal)\b/.test(route.normalizedText)
+      ? "hoofdgerecht"
+      : /\b(?:dessert(?:s)?|nagerecht(?:en)?)\b/.test(route.normalizedText)
+        ? "dessert"
+        : /\b(?:drank(?:en)?|drink(?:s)?)\b/.test(route.normalizedText)
+          ? "dranken"
+          : undefined;
+  const label = names.length ? names.slice(0, 3).join(", ") : courseLabel ?? "gesprekscontext";
   const verb: Record<OrderActionType, string> = {
     ADD: "Toevoegen",
     INCREMENT: "Bijbestellen",

@@ -22,7 +22,7 @@ import {
 import { productsForMenuQuestion } from "@/src/order-understanding/menu-question";
 import { normalizeFlemish } from "@/src/language/flemish-dialect";
 import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
-import { routeIntent } from "@/src/order-understanding/intent-router";
+import { finalDecisionClause, isUndecidedDeliberation, routeIntent } from "@/src/order-understanding/intent-router";
 import { isOrderableProduct, semanticProductAliases } from "@/src/semantic-menu/product-index";
 
 const NUMBER_WORDS: Record<string, number> = {
@@ -125,7 +125,7 @@ function isQuestion(text: string): boolean {
   if (/\b(wil weten|willen weten|kan je zeggen|kun je zeggen|zeg eens welke|i want to know|je veux savoir)\b/.test(normalized)) {
     return true;
   }
-  const orderCue = /\b(neem|nemen|wil|wilt|doe dan|bestel|pour moi|je prends|i'll have|i will have)\b/.test(normalized);
+  const orderCue = /\b(neem|nemen|wil|wilt|doe dan|doe maar|bestel|voor mij|voor ons|pour moi|je prends|i'll have|i will have)\b/.test(normalized);
   const questionCue = /^(hebben|heb je|hebben jullie|welke|wat|is er|zijn er|do you have|which|what|avez vous|quels|est ce)/.test(normalized);
   return questionCue && !orderCue;
 }
@@ -159,6 +159,7 @@ function isCancellation(text: string): boolean {
     /\b(?:toch|maar)\s+niet\b/,
     /\b(?:minder|niet meer)\b/,
     /\b(?:don't need|do not need|leave .* out|laisse tomber)\b/,
+    /\bskip\b/,
   ].some((pattern) => pattern.test(normalized));
 }
 
@@ -273,6 +274,17 @@ function conversationSegments(text: string): string[] {
     .filter(Boolean);
 }
 
+function compoundOrderReplacementSegments(text: string): [string, string] | undefined {
+  const normalized = normalizeSpoken(text);
+  const marker = /\b(?:of|maar)\s+(?=in plaats van|in de plaats van|instead of|a la place de)/g;
+  const matches = [...normalized.matchAll(marker)];
+  const latest = matches.at(-1);
+  if (!latest?.index) return undefined;
+  const first = normalized.slice(0, latest.index).trim();
+  const second = normalized.slice(latest.index + latest[0].length).trim();
+  return first && second ? [first, second] : undefined;
+}
+
 function looksLikeOrderWithoutMatch(text: string): boolean {
   return /\b(neem|nemen|wil|doe dan|voor mij|pour moi|je prends|i'll have|bestel)\b/.test(normalizeSpoken(text));
 }
@@ -290,7 +302,7 @@ function hasOrderingContext(
     return false;
   }
   if (
-    /\b(neem|nemen|wil graag|wilt graag|bestel|voor mij|voor ons|doe er|doe dan|voeg|toevoegen|ik zet|zet erbij|mag ik|graag|nog een|nog eentje|nog ene|ook een|extra|please|pour moi|je prends|i'll have|i will have|is voor|zijn voor)\b/.test(normalized) ||
+    /\b(neem|nemen|wil graag|wilt graag|bestel|voor mij|voor ons|doe er|doe dan|doe maar|voeg|toevoegen|ik zet|zet erbij|mag ik|graag|nog een|nog eentje|nog ene|ook een|extra|please|pour moi|je prends|i'll have|i will have|is voor|zijn voor)\b/.test(normalized) ||
     /\b(?:geef|breng|pak|zet|doe)\s+(?:me|mij|ons)\b/.test(normalized) ||
     /\b(?:ik|wij|we)\s+(?:neem|nemen|wil|willen|pak|pakken|kies|kiezen)\b/.test(normalized)
   ) {
@@ -311,7 +323,7 @@ function hasOrderingContext(
     residue = `${residue.slice(0, mention.start)} ${residue.slice(mention.end)}`;
   }
   residue = normalizeSpoken(residue)
-    .replace(/\b(een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|a|an|one|two|three|four|five|un|une|deux|trois|quatre|cinq|en|of|and|et|graag|aub|alstublieft|please)\b/g, "")
+    .replace(/\b(een|eentje|twee|tweede|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|a|an|one|two|three|four|five|un|une|deux|trois|quatre|cinq|en|of|and|et|extra|graag|aub|alstublieft|please)\b/g, "")
     .replace(/\d+/g, "")
     .replace(/[.']/g, " ")
     .replace(/\s+/g, " ")
@@ -377,7 +389,7 @@ function parseReplacementInstruction(value: string): ReplacementInstruction | un
   }
 
   const targetFirstWithVerb = text.match(
-    /^(?:in plaats van|in de plaats van|instead of|a la place de)\s+(.+?)\s+(?:wil ik|wou ik|neem ik|pak ik|bestel ik|doe mij|geef mij|i want|i will have|i'll have|je prends|je veux|donnez moi)\s+(.+)$/,
+    /^(?:in plaats van|in de plaats van|instead of|a la place de)\s+(.+?)\s+(?:wil ik|wou ik|neem ik|pak ik|bestel ik|doe mij|geef mij|doe maar|neem maar|pak maar|geef maar|i want|i will have|i'll have|je prends|je veux|donnez moi)\s+(.+)$/,
   );
   if (targetFirstWithVerb) {
     return { target: targetFirstWithVerb[1].trim(), replacement: cleanReplacementPhrase(targetFirstWithVerb[2]) };
@@ -596,6 +608,17 @@ export function interpretDeterministically(
 
   const processCustomerText = (spokenText: string) => {
     const text = normalizeFlemish(spokenText, request.dialectProfile);
+    const compoundReplacement = compoundOrderReplacementSegments(text);
+    if (compoundReplacement) {
+      for (const segment of compoundReplacement) processCustomerText(segment);
+      return;
+    }
+    const finalChoice = finalDecisionClause(text);
+    if (finalChoice) {
+      processCustomerText(finalChoice);
+      return;
+    }
+    const undecidedDeliberation = isUndecidedDeliberation(text);
     const matchOptions = {
       preferredProductIds: recentOfferedProducts.map((product) => product.id),
       existingProductIds: lines.map((line) => line.productId),
@@ -633,6 +656,24 @@ export function interpretDeterministically(
     if (["menu_question", "availability_question", "price_question", "ingredient_question", "recommendation_question"].includes(routed.intent) || isQuestion(text)) {
       const questionProducts = productsForMenuQuestion(text, menu);
       if (questionProducts.length > 0) recentOfferedProducts = questionProducts.slice(0, 12);
+      return;
+    }
+    const openAlternativeChoice = !replacementInstruction
+      && /\b(?:of|or|ou)\b/.test(text)
+      && spokenProductMentions.length > 1
+      && routed.requiresOrderMutation;
+    if (undecidedDeliberation || openAlternativeChoice) {
+      const candidates = [...new Map(spokenProductMentions
+        .flatMap((mention) => mention.candidates)
+        .map((product) => [product.id, product])).values()];
+      issues.push({
+        id: nextId("issue"),
+        type: "ambiguous_product",
+        blocking: true,
+        message: "Er werd nog geen definitieve keuze gehoord. Kies één van de genoemde opties.",
+        rawText: text,
+        productCandidates: candidates.slice(0, 5).map(issueCandidate),
+      });
       return;
     }
     if (routed.intent === "non_order") return;
@@ -707,6 +748,8 @@ export function interpretDeterministically(
 
       const cancellationMentions = findProductMentions(text, menu, matchOptions);
       if (cancellationMentions.length === 0) {
+        const removedByCourse = removeMatchingCourse(text);
+        if (removedByCourse !== undefined) return;
         if (/\b(?:vorige|laatste)\b/.test(normalized) && lines.length > 0) {
           const latestLine = lines.at(-1)!;
           const latestProduct = menu.products.find((product) => product.id === latestLine.productId);

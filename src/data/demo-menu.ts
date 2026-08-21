@@ -56,7 +56,7 @@ const coffee: ModifierGroup = {
 const menu: TenantMenu = {
   tenantId: "tenant-demo-brussels",
   restaurantName: "Brasserie De Spraakwaterval",
-  version: "mock-2026-08-21.2",
+  version: "mock-2026-08-21.3",
   currency: "EUR",
   modifierGroups: [cuisson, side, sauce, coffee],
   tables: Array.from({ length: 20 }, (_, index) => ({
@@ -75,8 +75,8 @@ const menu: TenantMenu = {
     { id: "POS-1102", sku: "COCA-Z-20", posName: "COCA Z 20", canonicalName: "Coca-Cola Zero", category: "Soft drinks", defaultCourse: "drinks", priceCents: 320, active: true, aliases: ["coca cola zero", "coca colla zero", "coca zero", "cola zero", "coke zero", "ne zero", "zero", "cola zonder suiker"], modifierGroupIds: [], allergenCodes: [] },
     { id: "POS-1103", sku: "WATER-ST", posName: "WATER ST 50", canonicalName: "Still water", category: "Soft drinks", defaultCourse: "drinks", priceCents: 450, active: true, aliases: ["plat water", "still water", "stil water", "eau plate"], modifierGroupIds: [], allergenCodes: [] },
     { id: "POS-1201", sku: "GIN-TON", posName: "GIN TONIC H", canonicalName: "House gin and tonic", category: "Cocktails", defaultCourse: "drinks", priceCents: 1250, active: true, aliases: ["gin tonic", "gin tonik", "gin and tonic", "gin-tonic"], modifierGroupIds: [], allergenCodes: [] },
-    { id: "POS-1301", sku: "W-WHITE-A", posName: "WIT HUIS A 20", canonicalName: "House white wine — Vermentino", category: "Wine", defaultCourse: "drinks", priceCents: 620, active: true, aliases: ["huiswijn wit", "witte huiswijn", "house white wine"], modifierGroupIds: [], allergenCodes: ["sulphites"] },
-    { id: "POS-1302", sku: "W-WHITE-B", posName: "WIT HUIS B 20", canonicalName: "House white wine — Chardonnay", category: "Wine", defaultCourse: "drinks", priceCents: 650, active: true, aliases: ["huiswijn wit", "witte huiswijn", "house white wine"], modifierGroupIds: [], allergenCodes: ["sulphites"] },
+    { id: "POS-1301", sku: "W-WHITE-A", posName: "WIT HUIS A 20", canonicalName: "House white wine — Vermentino", category: "Wine", defaultCourse: "drinks", priceCents: 620, active: true, aliases: ["huiswijn wit", "witte huiswijn", "witte wijn", "glaasje witte wijn", "glas witte wijn", "house white wine"], modifierGroupIds: [], allergenCodes: ["sulphites"] },
+    { id: "POS-1302", sku: "W-WHITE-B", posName: "WIT HUIS B 20", canonicalName: "House white wine — Chardonnay", category: "Wine", defaultCourse: "drinks", priceCents: 650, active: true, aliases: ["huiswijn wit", "witte huiswijn", "witte wijn", "glaasje witte wijn", "glas witte wijn", "house white wine"], modifierGroupIds: [], allergenCodes: ["sulphites"] },
     { id: "POS-2001", sku: "GAR-KROK", posName: "GARNAALKROK 2", canonicalName: "Shrimp croquettes", category: "Starters", defaultCourse: "starter", priceCents: 1750, active: true, aliases: ["garnaalkroketten", "garnaal kroketten", "garnaal kroket", "garnalen kroketten", "shrimp croquettes", "croquettes aux crevettes"], modifierGroupIds: [], allergenCodes: ["crustaceans", "gluten", "milk"] },
     { id: "POS-3001", sku: "STK-STD", posName: "STK STD", canonicalName: "Belgian beef steak", category: "Mains", defaultCourse: "main", priceCents: 2890, active: true, aliases: ["steak", "steek", "biefstuk", "beef steak"], modifierGroupIds: ["MG-CUISSON", "MG-SIDE", "MG-SAUCE"], allergenCodes: [] },
     { id: "POS-3002", sku: "VOLAU", posName: "VOLAU", canonicalName: "Vol-au-vent", category: "Mains", defaultCourse: "main", priceCents: 2350, active: true, aliases: ["vol-au-vent", "vol au vent", "vol au van", "vol over vent", "volovan", "videe", "vidée"], modifierGroupIds: ["MG-SIDE"], allergenCodes: ["gluten", "milk", "eggs"] },

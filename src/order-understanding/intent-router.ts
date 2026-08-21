@@ -35,15 +35,48 @@ const MENU_SUBJECT = /\b(?:bier|bieren|wijn|wijnen|drank|dranken|drinken|boire|b
 const ORDER_CUE = /\b(?:ik neem|ik pak|ik ga voor|ik kies|ik wil|ik wou graag|wij nemen|we nemen|voor mij|voor ons|geef|doe|zet|breng|bestel|schrijf|voeg|mag ik|zou ik mogen|graag|laat maar komen|laat komen|je prends|pour moi|i'll have|i will have)\b/;
 const POLITE_REQUEST_CUE = /\b(?:alsjeblieft|alstublieft|aub|please|s il vous plait|s'il vous plait|svp)\b/;
 const ADDITION_CUE = /\b(?:erbij|daarbij|nog een|nog eentje|nog ene|ook een|voeg toe|doe er|zet er|schrijf er|extra|bijbestellen|voor mij ook|dezelfde nog|maak er nog|eentje meer)\b/;
-const REMOVAL_CUE = /\b(?:geen|gene|niet meer|toch niet|toch geen|hoef.*niet|moet.*niet hebben|laat.*zitten|laat.*vallen|laat.*steken|haal.*weg|doe.*weg|eruit|er uit|verwijder|schrap|annuleer|cancel|remove|supprime)\b/;
+const REMOVAL_CUE = /\b(?:geen|gene|niet meer|toch niet|toch geen|hoef.*niet|moet.*niet hebben|laat.*zitten|laat.*vallen|laat.*steken|haal.*weg|doe.*weg|eruit|er uit|verwijder|schrap|annuleer|skip|cancel|remove|supprime)\b/;
 const REPLACEMENT_CUE = /\b(?:in plaats van|in de plaats van|instead of|a la place de|vervang|verander .* naar|maak daar|wissel .* voor|toch liever .* dan|change .* to|replace .* with|remplace(?:z)? .* par)\b/;
 const CORRECTION_CUE = /\b(?:nee wacht|ik bedoel|correctie|dat klopt niet|sorry|maak er|eigenlijk|toch liever)\b/;
 const STORY_CUE = /\b(?:grap|grapje|mop|mopje|zwanzen|verhaal|gisteren|vorige week|vorig jaar|mijn nonkel|mijn zus|mijn vriend|droomde|herinner me|praat over|vertelde|heet|noemt|zoals die keer)\b/;
 const CONTEXT_ACCEPTANCE = /\b(?:doe maar|geef maar|die graag|dat graag|die mag|dat mag|klinkt goed|lijkt lekker|laat maar komen|ik ga daarvoor|eentje daarvan)\b/;
 
+export function finalDecisionClause(value: string): string | undefined {
+  const normalized = normalizeFlemish(value, "auto");
+  const candidates = [
+    ...normalized.matchAll(/\b(?:doe|geef|neem|pak|breng|bestel)(?:\s+(?:me|mij|ons|er))?\s+maar\s+/g),
+    ...normalized.matchAll(/\b(?:uiteindelijk|dan toch)\s+(?:neem|kies|pak|bestel)(?:\s+ik)?\s+/g),
+    ...normalized.matchAll(/\b(?:ik\s+)?(?:ga|kies)\s+(?:uiteindelijk\s+)?voor\s+/g),
+    ...normalized.matchAll(/\btoch\s+liever\s+/g),
+    ...normalized.matchAll(/\b(?:actually\s+)?(?:i'll|i will)\s+(?:take|have)\s+/g),
+    ...normalized.matchAll(/\b(?:finalement\s+)?je\s+prends\s+/g),
+  ].filter((match) => match.index !== undefined);
+  const decisiveCue = candidates.sort((left, right) => (right.index ?? 0) - (left.index ?? 0))[0];
+  if (!decisiveCue || !decisiveCue.index) return undefined;
+  const prefix = normalized.slice(0, decisiveCue.index);
+  if (/\b(?:in plaats van|in de plaats van|instead of|a la place de)\b/.test(prefix)) return undefined;
+  if (!/\b(?:misschien|of|beter|liever|twijfel|twijfelen|goh|hmm|euh|eerst|dacht|denken|wat|welke|maybe|perhaps|or|rather|thinking|actually|peut etre|ou|plutot|hesite)\b/.test(prefix)) return undefined;
+  const selection = normalized
+    .slice(decisiveCue.index + decisiveCue[0].length)
+    .replace(/[.?!]+$/, "")
+    .replace(/\s+(?:anders|dan|toch|eigenlijk|goh|zeker|instead|after all|please|plutot|finalement|svp)$/, "")
+    .replace(/[.?!]+$/, "")
+    .trim();
+  return selection ? `doe maar ${selection}` : undefined;
+}
+
+export function isUndecidedDeliberation(value: string): boolean {
+  const normalized = normalizeFlemish(value, "auto");
+  if (finalDecisionClause(normalized)) return false;
+  if (/\b(?:wat raad|welke raad|aanraden|aanbevelen|recommend|conseil)\b/.test(normalized)) return false;
+  const uncertainty = /\b(?:misschien|twijfel|twijfelen|weet het nog niet|nog niet beslist|kan niet kiezen|maybe|perhaps|not decided|have not decided|cannot decide|peut etre|hesite|pas decide)\b/.test(normalized);
+  const alternatives = /\b(?:of|tussen|or|between|ou|entre)\b/.test(normalized);
+  return uncertainty && alternatives;
+}
+
 export function segmentUtterance(text: string): string[] {
   return text
-    .split(/\r?\n|[!?;]+|\.(?=\s|$)|,\s*(?=(?:maar\s+)?(?:ik|wij|we|voor mij|doe|geef|haal|laat|welke|wat|hoeveel|heb))/i)
+    .split(/\r?\n|[!?;]+|\.(?=\s|$)|,\s*(?=(?:maar\s+)?(?:ik|wij|we|voor mij|doe|geef|haal|laat|welke|wat|hoeveel|heb))|\b(?:of|maar)\s+(?=in plaats van|in de plaats van|instead of|a la place de)/i)
     .map((segment) => segment.trim())
     .filter(Boolean);
 }
@@ -59,6 +92,8 @@ export function routeIntent(
     existingProductIds?: string[];
   } = {},
 ): RoutedIntent {
+  const finalChoice = finalDecisionClause(text);
+  if (finalChoice) return routeIntent(finalChoice, options);
   const normalizedText = normalizeFlemish(text, options.dialectProfile ?? "auto");
   const startsAsQuestion = QUESTION_START.test(normalizedText) || DIRECT_QUESTION_START.test(normalizedText);
   const productMentions = options.menu
@@ -78,9 +113,11 @@ export function routeIntent(
     productIds,
     requiresOrderMutation: ["order", "addition", "removal", "replacement", "correction"].includes(intent),
   });
-  const politeOrderQuestion = /^(?:kan ik|mag ik|zou ik|kunnen we|could i|can i|may i|est ce que je peux)\b.*\b(?:krijgen|hebben|nemen|bestellen|pakken|have|get|prendre)\b/.test(normalizedText);
+  const forMeProductRequest = /^(?:heb je|hebben jullie)\b.*\bvoor\s+(?:mij|ons)\b/.test(normalizedText) && productIds.length > 0;
+  const politeOrderQuestion = forMeProductRequest || /^(?:kan ik|mag ik|zou ik|kunnen we|could i|can i|may i|est ce que je peux)\b.*\b(?:krijgen|hebben|nemen|bestellen|pakken|have|get|prendre)\b/.test(normalizedText);
 
   if (!normalizedText) return result("unclear", 0.2, ["empty"]);
+  if (isUndecidedDeliberation(normalizedText)) return result("non_order", 0.97, ["undecided-deliberation"]);
   if (/\b(?:wat kost|hoeveel kost|prijs|prijzen|how much|combien coute)\b/.test(normalizedText)) {
     return result("price_question", 0.98, ["price-question"]);
   }
@@ -90,7 +127,7 @@ export function routeIntent(
   if (/\b(?:wat raad|welke raad|aanraden|aanbevelen|suggestie|lekkerste|populair(?:ste)?|recommend|conseil)\b/.test(normalizedText)) {
     return result("recommendation_question", 0.96, ["recommendation-question"]);
   }
-  if ((/^(?:hebben jullie|heb je|is er|zijn er|do you have|avez vous)\b/.test(normalizedText) || /\b(?:beschikbaar|op voorraad|nog over)\b/.test(normalizedText)) && (MENU_SUBJECT.test(normalizedText) || productIds.length > 0)) {
+  if (!forMeProductRequest && (/^(?:hebben jullie|heb je|is er|zijn er|do you have|avez vous)\b/.test(normalizedText) || /\b(?:beschikbaar|op voorraad|nog over)\b/.test(normalizedText)) && (MENU_SUBJECT.test(normalizedText) || productIds.length > 0)) {
     return result("availability_question", 0.97, ["availability-question"]);
   }
   if (!politeOrderQuestion && (startsAsQuestion || /\b(?:wil weten|zeg eens welke|toon me|kan ik kiezen uit)\b/.test(normalizedText)) && (MENU_SUBJECT.test(normalizedText) || productIds.length > 0)) {
@@ -129,6 +166,8 @@ export function routeUtterance(
   text: string,
   options: Parameters<typeof routeIntent>[1] = {},
 ): RoutedIntent[] {
+  const finalChoice = finalDecisionClause(text);
+  if (finalChoice) return [routeIntent(finalChoice, options)];
   const segments = segmentUtterance(text);
   return (segments.length ? segments : [text]).map((segment) => routeIntent(segment, options));
 }
