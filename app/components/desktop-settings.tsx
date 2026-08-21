@@ -51,7 +51,17 @@ interface HealthResponse {
   retention?: string;
 }
 
-export function DesktopSettings() {
+interface DesktopSettingsProps {
+  livePreviewEnabled: boolean;
+  onLivePreviewEnabledChange: (enabled: boolean) => void;
+  showLivePreviewSetting: boolean;
+}
+
+export function DesktopSettings({
+  livePreviewEnabled,
+  onLivePreviewEnabledChange,
+  showLivePreviewSetting,
+}: DesktopSettingsProps) {
   const [desktopStatus, setDesktopStatus] = useState<ServiceEarsDesktopStatus>();
   const [localSpeech, setLocalSpeech] = useState<LocalSpeechHealth>();
   const [culinaryKnowledge, setCulinaryKnowledge] = useState<HealthResponse["culinaryKnowledge"]>();
@@ -153,6 +163,19 @@ export function DesktopSettings() {
                   ? `${desktopStatus?.speechModel ?? "Het lokale spraakmodel"} is geïnstalleerd en klaar voor gebruik.`
                   : "De spraakmodule is niet gevonden. Installeer de nieuwste Service Ears-versie opnieuw."}
             </div>
+            {showLivePreviewSetting && (
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={livePreviewEnabled}
+                  onChange={(event) => onLivePreviewEnabledChange(event.target.checked)}
+                />
+                <span>
+                  <strong>Snelle live voorvertoning</strong>
+                  <small>Optioneel: Microsoft Edge verwerkt de spraak tijdens het luisteren. De lokale opname blijft altijd de zelfstandige eindcontrole.</small>
+                </span>
+              </label>
+            )}
             {localSpeech && <>
               <p className="model-device-summary">
                 Toestel: {localSpeech.device.totalMemoryGb} GB RAM · {localSpeech.device.logicalProcessors} logische processors · {localSpeech.device.backend}.

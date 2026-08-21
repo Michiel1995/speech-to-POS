@@ -202,9 +202,6 @@ select:focus, input:focus, textarea:focus { border-color: #7caa99; background: w
 .audio-meter { height: 5px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,0.13); }
 .audio-meter span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #a9caba, #dcc88e); box-shadow: 0 0 12px rgba(220,200,142,0.45); transition: width 90ms linear; }
 .recording-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 18px; }
-.live-preview-toggle { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 2px 9px; max-width: 340px; margin: 0; color: rgba(255,255,255,0.88); font-size: 0.7rem; font-weight: 730; letter-spacing: 0.01em; text-transform: none; }
-.live-preview-toggle input { grid-row: 1 / span 2; width: 18px; height: 18px; min-height: 0; accent-color: #cbb274; }
-.live-preview-toggle small { color: rgba(255,255,255,0.5); font-size: 0.62rem; font-weight: 470; line-height: 1.4; }
 
 .workflow-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0 0 22px; }
 .workflow-strip > div { position: relative; display: grid; grid-template-columns: 36px 1fr; column-gap: 11px; align-items: center; min-height: 70px; border: 1px solid rgba(98, 108, 102, 0.13); border-radius: 16px; padding: 11px 14px; background: rgba(255,254,250,0.72); box-shadow: 0 6px 22px rgba(32,45,39,0.04); backdrop-filter: blur(10px); }
@@ -275,13 +272,22 @@ select:focus, input:focus, textarea:focus { border-color: #7caa99; background: w
 
 .course-group { margin: 0 0 24px; }
 .course-group h3 { margin: 0 0 10px; padding-bottom: 9px; border-bottom: 1px solid var(--line); color: #597067; font-size: 0.65rem; font-weight: 780; letter-spacing: 0.17em; text-transform: uppercase; }
-.order-line { display: grid; grid-template-columns: 40px 1fr; gap: 13px; align-items: start; margin-top: 8px; border: 1px solid #e3ded4; border-radius: 14px; padding: 13px 14px; background: #fbfaf6; box-shadow: 0 5px 15px rgba(30,43,37,0.035); }
+.order-line { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 13px; align-items: start; margin-top: 8px; border: 1px solid #e3ded4; border-radius: 14px; padding: 13px 14px; background: #fbfaf6; box-shadow: 0 5px 15px rgba(30,43,37,0.035); }
 .line-quantity { display: grid; place-items: center; width: 36px; height: 36px; border: 1px solid #d9c99f; border-radius: 50%; color: var(--forest); background: var(--brass-soft); font-family: var(--serif); font-size: 1rem; font-weight: 700; }
 .line-details { display: grid; gap: 4px; min-width: 0; }
 .order-line strong { font-family: var(--serif); font-size: 1.06rem; font-weight: 650; }
 .pos-name { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.69rem; }
 .modifier { color: #275d4c; font-size: 0.78rem; }
 .line-note { color: #7b5920; font-size: 0.78rem; }
+.line-actions { display: flex; align-items: center; gap: 6px; }
+.line-actions button { display: grid; min-width: 34px; min-height: 34px; place-items: center; border: 1px solid #cfc8bb; border-radius: 10px; padding: 0 9px; color: #20483c; background: #fffefb; font-size: 0.94rem; font-weight: 760; }
+.line-actions button:hover { border-color: #809b90; background: #f1f6f2; }
+.line-actions .line-remove { color: #8b4137; font-size: 0.66rem; }
+.settings-toggle { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 12px; border: 1px solid #d8d1c4; border-radius: 14px; padding: 13px 14px; background: #f8f6f0; cursor: pointer; }
+.settings-toggle input { width: 19px; height: 19px; min-height: 0; accent-color: #174f3d; }
+.settings-toggle span { display: grid; gap: 3px; }
+.settings-toggle strong { color: #193e34; font-size: 0.78rem; }
+.settings-toggle small { color: #69766f; font-size: 0.7rem; line-height: 1.4; }
 
 .issue-step { margin-top: 26px; color: var(--orange); }
 .issue-card, .warning-card { margin: 12px 0; border-radius: 15px; padding: 16px; }
@@ -570,6 +576,8 @@ footer strong { color: var(--forest); font-family: var(--serif); font-size: 0.72
   .language-add-row { grid-template-columns: 1fr; }
   .mapping-row { align-items: stretch; flex-direction: column; }
   .review-tools { align-items: stretch; flex-direction: column; }
+  .order-line { grid-template-columns: 40px minmax(0, 1fr); }
+  .line-actions { grid-column: 2; flex-wrap: wrap; }
   .pos-receipt { grid-template-columns: 34px 1fr; }
   .pos-receipt time { grid-column: 2; }
 }

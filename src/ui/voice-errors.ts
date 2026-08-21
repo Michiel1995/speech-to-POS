@@ -21,8 +21,8 @@ export interface UserFacingVoiceError {
 const ERROR_MESSAGES: Partial<Record<string, UserFacingVoiceError>> = {
   TRANSCRIPTION_BUDGET_EXCEEDED: {
     code: "TRANSCRIPTION_BUDGET_EXCEEDED",
-    title: "Lokale herkenning had meer tijd nodig",
-    message: "Er was nog geen bruikbare live transcriptie beschikbaar. Schakel ‘Voorlopig concept via Microsoft Edge’ in: dan verschijnt de beste menu-gegronde herkenning in Review en wordt twijfel zichtbaar gemarkeerd.",
+    title: "Opname niet volledig herkend",
+    message: "Deze opname kon niet volledig worden uitgeschreven. De bestaande bestelling bleef bewaard. Probeer de uitspraak nogmaals, iets dichter bij de microfoon.",
     retryable: true,
   },
   LOCAL_SPEECH_BUSY: {

@@ -282,7 +282,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
       const vadSpeechPadMs = quietRecording ? 280 : noisyRecording ? 160 : profile === "primary" ? 180 : 240;
       const vadSamplesOverlap = profile === "primary" ? 0.25 : 0.30;
       const timeoutMs = options.maxPassMs
-        ? Math.max(1_500, Math.min(5_000, options.maxPassMs))
+        ? Math.max(1_500, Math.min(10_000, options.maxPassMs))
         : Math.max(30_000, Math.min(90_000, selection.targetLatencyMs * 3));
       const args = [
         "-m", selection.path,
@@ -358,7 +358,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
     } catch (error) {
       if (options.maxPassMs) {
         throw new DomainError(
-          "De lokale eindcontrole bereikte de tijdslimiet. Gebruik live tekst voor een snelle, menu-gegronde fallback of probeer opnieuw.",
+          "De lokale herkenning kon deze opname niet tijdig volledig uitschrijven. De bestaande bestelling bleef bewaard; probeer de uitspraak nogmaals, iets dichter bij de microfoon.",
           "TRANSCRIPTION_BUDGET_EXCEEDED",
           504,
         );

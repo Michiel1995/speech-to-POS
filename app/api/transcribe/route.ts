@@ -18,7 +18,10 @@ import {
   type OfflineTranscriptionResult,
   type SpeechLanguage,
 } from "@/src/speech/offline-transcriber";
-import { FINAL_TRANSCRIPTION_BUDGET_MS } from "@/src/speech/latency-budget";
+import {
+  FINAL_TRANSCRIPTION_BUDGET_MS,
+  LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
+} from "@/src/speech/latency-budget";
 
 export const runtime = "nodejs";
 
@@ -159,7 +162,12 @@ export async function POST(request: Request) {
           noiseFloorRms: finiteNumber(data.get("audioNoiseFloorRms")),
         },
         preferLowLatency: contextProductIds.length === 1 && audio.size <= 800_000,
-        maxPassMs: FINAL_TRANSCRIPTION_BUDGET_MS,
+        // Live Edge text may satisfy the strict five-second fallback. Without
+        // it, keep listening to the already-recorded local WAV for a little
+        // longer instead of turning a valid spoken order into an empty Review.
+        maxPassMs: browserCandidates.length > 0
+          ? FINAL_TRANSCRIPTION_BUDGET_MS
+          : LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
       });
     } catch (error) {
       // Keep a useful menu/context-grounded live hypothesis when the local

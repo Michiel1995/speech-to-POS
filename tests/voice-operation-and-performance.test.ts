@@ -16,6 +16,7 @@ import {
   evaluateVoiceLatencyGate,
   FINAL_REVIEW_BUDGET_MS,
   FINAL_TRANSCRIPTION_BUDGET_MS,
+  LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
   PROVISIONAL_REVIEW_BUDGET_MS,
 } from "@/src/speech/latency-budget";
 
@@ -94,6 +95,7 @@ describe("privacy-safe latency metrics", () => {
     expect(PROVISIONAL_REVIEW_BUDGET_MS).toBe(2_000);
     expect(FINAL_REVIEW_BUDGET_MS).toBe(5_000);
     expect(FINAL_TRANSCRIPTION_BUDGET_MS).toBeLessThan(FINAL_REVIEW_BUDGET_MS);
+    expect(LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS).toBe(8_000);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 4_999 }).passed).toBe(true);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 2_000, finalP95Ms: 4_999 }).passed).toBe(false);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 5_000 }).passed).toBe(false);
@@ -113,12 +115,13 @@ describe("privacy-safe latency metrics", () => {
 });
 
 describe("typed user-facing errors", () => {
-  it("explains how a five-second timeout can still yield a grounded Review", () => {
+  it("explains a local timeout without making Edge a requirement", () => {
     expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED", status: 504 })).toMatchObject({
-      title: "Lokale herkenning had meer tijd nodig",
+      title: "Opname niet volledig herkend",
       retryable: true,
     });
-    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).toContain("menu-gegronde herkenning");
+    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).toContain("bestaande bestelling bleef bewaard");
+    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).not.toContain("Microsoft Edge");
   });
 
   it("never exposes Failed to fetch", () => {

@@ -5,7 +5,12 @@ import { InterpretRequestSchema } from "@/src/domain/schemas";
 import { interpretDeterministically } from "@/src/order-understanding/deterministic-engine";
 import { speechTranscriptMenuScore } from "@/src/semantic-menu/matcher";
 import { buildSpeechVocabulary } from "@/src/speech/menu-vocabulary";
-import { confirmSpeechProduct, rejectSpeechProduct } from "@/src/ui/draft-actions";
+import {
+  changeDraftLineQuantity,
+  confirmSpeechProduct,
+  rejectSpeechProduct,
+  removeDraftLine,
+} from "@/src/ui/draft-actions";
 import { validateDraft } from "@/src/validation/order-validator";
 
 function audioOrder(text: string, priorLines?: ReturnType<typeof interpretDeterministically>["lines"]) {
@@ -109,5 +114,19 @@ describe("speech robustness", () => {
     expect(new Set(addition.lines.map((line) => line.lineId)).size).toBe(addition.lines.length);
     const issue = addition.issues.find((candidate) => candidate.type === "speech_confirmation");
     expect(issue?.lineId).toBe(addition.lines.find((line) => line.productId === "POS-1102")?.lineId);
+  });
+
+  it("lets the waiter change quantities or remove a line without leaving stale issues", () => {
+    const uncertain = audioOrder("Doe er een coka cola zero bij.");
+    const line = uncertain.lines[0];
+    const doubled = changeDraftLineQuantity(uncertain, line.lineId, 1);
+    expect(doubled.lines[0].quantity).toBe(2);
+
+    const reduced = changeDraftLineQuantity(doubled, line.lineId, -1);
+    expect(reduced.lines[0].quantity).toBe(1);
+
+    const removed = removeDraftLine(reduced, line.lineId);
+    expect(removed.lines).toHaveLength(0);
+    expect(removed.issues.some((issue) => issue.lineId === line.lineId)).toBe(false);
   });
 });

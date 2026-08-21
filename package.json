@@ -1,6 +1,6 @@
 {
   "name": "speech-to-pos",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Installable AI voice layer for safe hospitality POS draft preparation.",
   "author": "Michiel1995",
   "private": true,

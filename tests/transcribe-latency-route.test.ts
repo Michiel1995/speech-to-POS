@@ -26,6 +26,19 @@ function audioRequest(text: string, confidence: number, final: boolean, contextP
   return new Request("http://localhost/api/transcribe", { method: "POST", body: data });
 }
 
+function localOnlyAudioRequest(): Request {
+  const data = new FormData();
+  data.append("operationId", "voice-local-only-test");
+  data.append("tableId", "TABLE-12");
+  data.append("baseDraftRevision", "empty");
+  data.append("audio", new File([new Uint8Array(128)], "test.wav", { type: "audio/wav" }));
+  data.append("language", "nl");
+  data.append("contextProductIds", "[]");
+  data.append("priorProductIds", "[]");
+  data.append("dialectProfile", "auto");
+  return new Request("http://localhost/api/transcribe", { method: "POST", body: data });
+}
+
 function localResult(text: string) {
   return {
     text,
@@ -86,6 +99,16 @@ describe("hard voice latency and factuality route", () => {
     const response = await transcribePost(audioRequest("Doe mij misschien die van daarnet", 0.9, true, ["POS-1001"]));
     expect(response.ok).toBe(true);
     expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 4_200 }));
+  });
+
+  it("finishes from the recorded local WAV without requiring Edge live text", async () => {
+    offlineTranscriber.mockResolvedValue(localResult("Doe mij twee Duvel"));
+    const response = await transcribePost(localOnlyAudioRequest());
+    const body = await response.json() as { text?: string; engine?: string };
+
+    expect(response.ok).toBe(true);
+    expect(body).toMatchObject({ text: "Doe mij twee Duvel", engine: "whisper.cpp" });
+    expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 8_000 }));
   });
 
   it("keeps a menu-grounded browser order when the local pass reaches its budget", async () => {

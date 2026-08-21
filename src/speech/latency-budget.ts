@@ -5,6 +5,11 @@ export const FINAL_REVIEW_BUDGET_MS = 5_000;
 // request parsing, deterministic interpretation and React rendering.
 export const FINAL_TRANSCRIPTION_BUDGET_MS = 4_200;
 
+// When Edge has no live hypothesis (for example inside the installed desktop
+// shell), correctness wins over returning an empty Review. This is a ceiling,
+// not a delay: Whisper returns immediately when the transcript is ready.
+export const LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS = 8_000;
+
 export interface VoiceLatencyGateInput {
   provisionalP95Ms?: number;
   finalP95Ms?: number;

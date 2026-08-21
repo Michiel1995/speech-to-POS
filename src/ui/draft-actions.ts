@@ -129,3 +129,35 @@ export function rejectSpeechProduct(draft: DraftOrder, issueId: string): DraftOr
 export function addManualProduct(draft: DraftOrder, product: MenuProduct, menu: TenantMenu): DraftOrder {
   return resolveWithProduct(draft, "__manual__", product, menu);
 }
+
+export function changeDraftLineQuantity(
+  draft: DraftOrder,
+  lineId: string,
+  delta: -1 | 1,
+): DraftOrder {
+  const line = draft.lines.find((candidate) => candidate.lineId === lineId);
+  if (!line) return draft;
+  const quantity = line.quantity + delta;
+  if (quantity <= 0) {
+    return nextDraft(
+      draft,
+      draft.lines.filter((candidate) => candidate.lineId !== lineId),
+      draft.issues.filter((issue) => issue.lineId !== lineId),
+    );
+  }
+  return nextDraft(
+    draft,
+    draft.lines.map((candidate) => candidate.lineId === lineId ? { ...candidate, quantity } : candidate),
+    draft.issues,
+  );
+}
+
+export function removeDraftLine(draft: DraftOrder, lineId: string): DraftOrder {
+  const line = draft.lines.find((candidate) => candidate.lineId === lineId);
+  if (!line) return draft;
+  return nextDraft(
+    draft,
+    draft.lines.filter((candidate) => candidate.lineId !== lineId),
+    draft.issues.filter((issue) => issue.lineId !== lineId),
+  );
+}

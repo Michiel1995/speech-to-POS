@@ -40,7 +40,9 @@ import type {
   TenantMenu,
 } from "@/src/domain/schemas";
 import {
+  changeDraftLineQuantity,
   confirmSpeechProduct,
+  removeDraftLine,
   rejectSpeechProduct,
   resolveIssueWithoutData,
   resolveModifier,
@@ -1298,7 +1300,11 @@ export function VoiceOrderConsole() {
           </div>
         </div>
         <div className="header-statuses">
-          <DesktopSettings />
+          <DesktopSettings
+            livePreviewEnabled={livePreviewEnabled}
+            onLivePreviewEnabledChange={setLivePreviewEnabled}
+            showLivePreviewSetting={speechMode === "offline"}
+          />
           <span className={`network ${speechMode === "unavailable" ? "offline" : "online"}`}>
             {speechMode === "unavailable"
               ? "Spraak niet beschikbaar"
@@ -1358,18 +1364,6 @@ export function VoiceOrderConsole() {
             </div>
           </div>
           <div className="record-copy">
-            {speechMode === "offline" && (
-              <label className="live-preview-toggle">
-                <input
-                  type="checkbox"
-                  checked={livePreviewEnabled}
-                  disabled={Boolean(recording)}
-                  onChange={(event) => setLivePreviewEnabled(event.target.checked)}
-                />
-                Toon woorden tijdens het spreken
-                <small>Snelle voorvertoning; de lokale eindcontrole blijft actief</small>
-              </label>
-            )}
             <p>{speechMode === "offline"
               ? "Spreek natuurlijk. Bestellingen verschijnen automatisch; twijfel wordt zichtbaar gemarkeerd."
               : speechMode === "browser"
@@ -1491,6 +1485,26 @@ export function VoiceOrderConsole() {
                         <span className="pos-name">POS · {line.posName} · {line.sku}</span>
                         {line.modifiers.map((modifier) => <span className="modifier" key={modifier.optionId}>+ {modifier.canonicalName}</span>)}
                         {line.notes.map((note) => <span className="line-note" key={note}>Notitie · {note}</span>)}
+                      </div>
+                      <div className="line-actions" aria-label={`${line.canonicalName} wijzigen`}>
+                        <button
+                          type="button"
+                          onClick={() => commitDraft(changeDraftLineQuantity(draft, line.lineId, -1))}
+                          aria-label={`Eén ${line.canonicalName} minder`}
+                          title="Eén minder"
+                        >−</button>
+                        <button
+                          type="button"
+                          onClick={() => commitDraft(changeDraftLineQuantity(draft, line.lineId, 1))}
+                          aria-label={`Eén ${line.canonicalName} meer`}
+                          title="Eén meer"
+                        >+</button>
+                        <button
+                          type="button"
+                          className="line-remove"
+                          onClick={() => commitDraft(removeDraftLine(draft, line.lineId))}
+                          aria-label={`${line.canonicalName} verwijderen`}
+                        >Verwijder</button>
                       </div>
                     </div>
                   ))}
