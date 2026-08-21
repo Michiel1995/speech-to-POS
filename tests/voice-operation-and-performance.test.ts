@@ -113,12 +113,12 @@ describe("privacy-safe latency metrics", () => {
 });
 
 describe("typed user-facing errors", () => {
-  it("turns a five-second timeout into a no-guess action", () => {
+  it("explains how a five-second timeout can still yield a grounded Review", () => {
     expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED", status: 504 })).toMatchObject({
-      title: "Binnen 5 seconden onvoldoende bewijs",
+      title: "Lokale herkenning had meer tijd nodig",
       retryable: true,
     });
-    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).toContain("niets gegokt");
+    expect(userFacingVoiceError({ code: "TRANSCRIPTION_BUDGET_EXCEEDED" }).message).toContain("menu-gegronde herkenning");
   });
 
   it("never exposes Failed to fetch", () => {

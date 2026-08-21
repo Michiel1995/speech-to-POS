@@ -21,8 +21,8 @@ export interface UserFacingVoiceError {
 const ERROR_MESSAGES: Partial<Record<string, UserFacingVoiceError>> = {
   TRANSCRIPTION_BUDGET_EXCEEDED: {
     code: "TRANSCRIPTION_BUDGET_EXCEEDED",
-    title: "Binnen 5 seconden onvoldoende bewijs",
-    message: "Service Ears heeft bewust niets gegokt of gewijzigd. Schakel ‘Voorlopig concept via Microsoft Edge’ in of herhaal de korte uitspraak dichter bij de microfoon.",
+    title: "Lokale herkenning had meer tijd nodig",
+    message: "Er was nog geen bruikbare live transcriptie beschikbaar. Schakel ‘Voorlopig concept via Microsoft Edge’ in: dan verschijnt de beste menu-gegronde herkenning in Review en wordt twijfel zichtbaar gemarkeerd.",
     retryable: true,
   },
   LOCAL_SPEECH_BUSY: {

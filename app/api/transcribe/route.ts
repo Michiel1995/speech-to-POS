@@ -162,7 +162,11 @@ export async function POST(request: Request) {
         maxPassMs: FINAL_TRANSCRIPTION_BUDGET_MS,
       });
     } catch (error) {
-      const fallback = confidentBrowserSpeechFallback(browserCandidates, menu, rankingOptions);
+      // Keep a useful menu/context-grounded live hypothesis when the local
+      // pass misses its hard latency budget. The deterministic order engine
+      // still requires confirmation for fuzzy matches and rejects ungrounded
+      // speech, so Review gains a candidate without inventing a POS product.
+      const fallback = safeBrowserSpeechFallback(browserCandidates, menu, rankingOptions);
       if (!fallback) throw error;
       return edgeResponse(fallback, "edge-live-budget-fallback");
     }

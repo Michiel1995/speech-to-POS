@@ -82,9 +82,36 @@ describe("hard voice latency and factuality route", () => {
     expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 4_200 }));
   });
 
-  it("returns a no-guess timeout instead of finalizing vague noisy speech", async () => {
+  it("keeps a menu-grounded browser order when the local pass reaches its budget", async () => {
     offlineTranscriber.mockRejectedValue(new DomainError("budget", "TRANSCRIPTION_BUDGET_EXCEEDED", 504));
-    const response = await transcribePost(audioRequest("Doe mij misschien die van daarnet", 0.9, false, ["POS-1001"]));
+    const response = await transcribePost(audioRequest("Doe mij twee Duvel", 0.74, false));
+    const body = await response.json() as { text?: string; engine?: string; crossEngine?: { fallbackUsed?: boolean } };
+    expect(response.ok).toBe(true);
+    expect(body.text).toBe("Doe mij twee Duvel");
+    expect(body.engine).toBe("edge-live-budget-fallback");
+    expect(body.crossEngine?.fallbackUsed).toBe(true);
+
+    const reviewResponse = await interpretPost(new Request("http://localhost/api/interpret", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        operationId: "voice-budget-fallback-test",
+        baseDraftRevision: "empty",
+        tenantId: "tenant-demo-brussels",
+        tableId: "TABLE-12",
+        tableLabel: "Table 12",
+        source: "audio",
+        turns: [{ speaker: "customer", text: body.text }],
+      }),
+    }));
+    const review = await reviewResponse.json() as { draft: { lines: Array<{ productId: string; quantity: number }> } };
+    expect(reviewResponse.ok).toBe(true);
+    expect(review.draft.lines).toContainEqual(expect.objectContaining({ productId: "POS-1001", quantity: 2 }));
+  });
+
+  it("still refuses an ungrounded browser fragment after a local timeout", async () => {
+    offlineTranscriber.mockRejectedValue(new DomainError("budget", "TRANSCRIPTION_BUDGET_EXCEEDED", 504));
+    const response = await transcribePost(audioRequest("Mijn nonkel vertelde gisteren een lang verhaal", 0.9, false));
     const body = await response.json() as { code?: string };
     expect(response.status).toBe(504);
     expect(body.code).toBe("TRANSCRIPTION_BUDGET_EXCEEDED");
