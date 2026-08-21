@@ -26,7 +26,9 @@ export function apiError(error: unknown) {
       { status: 400 },
     );
   }
-  console.error(`[${diagnosticId}] INTERNAL_ERROR`, error);
+  // The reference is sufficient for correlation; never print arbitrary error
+  // payloads because a provider error can contain transcript or order text.
+  console.error(`[${diagnosticId}] INTERNAL_ERROR`);
   return NextResponse.json(
     { error: "Unexpected server error.", code: "INTERNAL_ERROR", diagnosticId },
     { status: 500 },

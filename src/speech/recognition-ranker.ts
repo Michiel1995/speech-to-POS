@@ -94,6 +94,33 @@ export function confidentBrowserSpeechFallback(
     : undefined;
 }
 
+/**
+ * Once recording has stopped, a strong full Edge snapshot can be used as the
+ * final transcript even when Edge did not promote its last interim result.
+ * This path is deliberately limited to explicit menu orders and questions;
+ * corrections/removals still require the local verifier because scope matters.
+ */
+export function completeBrowserSpeechFallback(
+  hypotheses: SpeechHypothesis[],
+  menu: TenantMenu,
+  options: SpeechHypothesisRankingOptions = {},
+): RankedSpeechHypothesis | undefined {
+  const best = safeBrowserSpeechFallback(hypotheses, menu, options);
+  if (!best || best.acousticScore < 0.72 || best.totalScore < 0.5) return undefined;
+  const routes = routeUtterance(best.text, {
+    menu,
+    dialectProfile: options.dialectProfile,
+    hasOrder: Boolean(options.existingProductIds?.length),
+    hasContext: Boolean(options.preferredProductIds?.length),
+    contextProductIds: options.preferredProductIds,
+    existingProductIds: options.existingProductIds,
+  });
+  const unsafeScopedMutation = routes.some((route) => ["removal", "replacement", "correction"].includes(route.intent));
+  const explicitOrder = best.productIds.length >= 2 && routes.some((route) => ["order", "addition"].includes(route.intent));
+  const clearQuestion = routes.some((route) => route.intent.includes("question") && route.confidence >= 0.9);
+  return !unsafeScopedMutation && (explicitOrder || clearQuestion) ? best : undefined;
+}
+
 const ARTIFACT_PATTERN = /\[(?:blank_audio|music|applause|laughter)\]|(\b\w+\b)(?:\s+\1){3,}/i;
 const HOSPITALITY_WORDS = /\b(?:neem|wil|graag|geef|doe|breng|bestel|erbij|menu|kaart|bier|wijn|water|koffie|voorgerecht|hoofdgerecht|dessert|rekening|hebben|welke|wat|hoeveel|sans|avec|pour|please|have)\b/;
 

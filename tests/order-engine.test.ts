@@ -589,6 +589,70 @@ describe("deterministic hospitality order engine", () => {
     expect(draft.lines).toMatchObject([{ productId: "POS-1201", quantity: 1 }]);
   });
 
+  it("applies an in-utterance quantity correction instead of adding both quantities", () => {
+    const draft = interpret([customer("Drie pils, nee maakt er vier pils van.")]);
+    expect(draft.lines).toMatchObject([{ productId: "POS-1002", quantity: 4 }]);
+    expect(draft.lines).toHaveLength(1);
+  });
+
+  it("keeps additions, removal and replacement atomic in one realistic follow-up", () => {
+    const first = interpret([customer("Twee cola zero, een tonic en drie pils.")]);
+    const changed = interpret([customer("Laat de tonic weg en geef mij in plaats daarvan bruiswater.")], first.lines);
+    expect(changed.lines.map((line) => [line.productId, line.quantity])).toEqual(expect.arrayContaining([
+      ["POS-1102", 2],
+      ["POS-1002", 3],
+      ["POS-1104", 1],
+    ]));
+    expect(changed.lines.some((line) => line.productId === "POS-1105")).toBe(false);
+  });
+
+  it("treats negative food details as modifiers and never as product cancellation", () => {
+    const draft = interpret([customer("Een hamburger zonder kaas met frieten, geen mayonaise maar ketchup.")]);
+    const burger = draft.lines.find((line) => line.productId === "POS-3006");
+    expect(burger).toBeDefined();
+    expect(burger?.modifiers.map((modifier) => modifier.optionId)).toEqual(expect.arrayContaining([
+      "MOD-NO-CHEESE",
+      "MOD-NO-MAYO",
+      "MOD-KETCHUP",
+    ]));
+    expect(draft.lines.some((line) => line.productId === "POS-3101")).toBe(true);
+  });
+
+  it("keeps per-unit ice instructions on separate POS lines", () => {
+    const draft = interpret([customer("Twee gin tonic, één zonder ijs en één met weinig ijs.")]);
+    const gin = draft.lines.filter((line) => line.productId === "POS-1201");
+    expect(gin).toHaveLength(2);
+    expect(gin.map((line) => line.quantity)).toEqual([1, 1]);
+    expect(gin.flatMap((line) => line.modifiers.map((modifier) => modifier.optionId)).sort()).toEqual([
+      "MOD-LIGHT-ICE",
+      "MOD-NO-ICE",
+    ]);
+  });
+
+  it("limits a ‘waarvan één’ garnish to one ordered unit", () => {
+    const draft = interpret([customer("Drie cola zero, waarvan één met citroen.")]);
+    const cola = draft.lines.filter((line) => line.productId === "POS-1102");
+    expect(cola.reduce((total, line) => total + line.quantity, 0)).toBe(3);
+    expect(cola.find((line) => line.modifiers.some((modifier) => modifier.optionId === "MOD-LEMON"))?.quantity).toBe(1);
+  });
+
+  it("registers report products that previously disappeared from the concept", () => {
+    const draft = interpret([customer("Een tonic, twee bruiswaters en een glas rode wijn.")]);
+    expect(draft.lines.map((line) => [line.productId, line.quantity])).toEqual(expect.arrayContaining([
+      ["POS-1105", 1],
+      ["POS-1104", 2],
+      ["POS-1303", 1],
+    ]));
+  });
+
+  it("keeps generic water ambiguous because still versus sparkling changes the POS item", () => {
+    const draft = interpret([customer("Doe twee water.")]);
+    expect(draft.lines).toHaveLength(0);
+    expect(draft.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "ambiguous_product", blocking: true }),
+    ]));
+  });
+
   it("rejects invalid POS IDs in deterministic validation", () => {
     const draft = interpret([customer("Een Duvel.")]);
     const invalid = DraftOrderSchema.parse({ ...draft, lines: [{ ...draft.lines[0], productId: "MADE-UP" }] });

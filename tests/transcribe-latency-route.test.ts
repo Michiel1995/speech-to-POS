@@ -138,6 +138,15 @@ describe("hard voice latency and factuality route", () => {
     expect(review.draft.lines).toContainEqual(expect.objectContaining({ productId: "POS-1001", quantity: 2 }));
   });
 
+  it("uses a complete multi-product Edge snapshot immediately after stop", async () => {
+    const spoken = "Twee cola zero, een tonic en drie pils alsjeblieft";
+    const response = await transcribePost(audioRequest(spoken, 0.74, false));
+    const body = await response.json() as { text?: string; engine?: string };
+    expect(response.ok).toBe(true);
+    expect(body).toMatchObject({ text: spoken, engine: "edge-live-complete" });
+    expect(offlineTranscriber).not.toHaveBeenCalled();
+  });
+
   it("recovers the noisy polite product list from the reported timeout into Review", async () => {
     offlineTranscriber.mockRejectedValue(new DomainError("budget", "TRANSCRIPTION_BUDGET_EXCEEDED", 504));
     const spoken = "Beetje een cola, een penche en de steek alsjeblieft.";
@@ -145,7 +154,7 @@ describe("hard voice latency and factuality route", () => {
     const body = await response.json() as { text?: string; engine?: string };
 
     expect(response.ok).toBe(true);
-    expect(body).toMatchObject({ text: spoken, engine: "edge-live-budget-fallback" });
+    expect(body).toMatchObject({ text: spoken, engine: "edge-live-complete" });
 
     const reviewResponse = await interpretPost(new Request("http://localhost/api/interpret", {
       method: "POST",

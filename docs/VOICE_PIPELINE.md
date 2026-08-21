@@ -21,13 +21,20 @@
 6. Current table context, ordered products, canonical menu names, POS names, aliases,
    and modifier pronunciations are prioritized inside the decoding prompt.
 7. A persistent localhost-only whisper server keeps the selected model warm between
-   utterances and unloads it after three idle minutes. Only one transcription runs at
-   once, no more than two wait, and CPU use is capped to at most six threads in the
-   portable build. The CLI remains an automatic process-level fallback.
+   utterances and unloads it after three idle minutes. Model loading is single-flight:
+   concurrent callers reuse one readiness promise. Each caller has its own bounded
+   startup/queue budget and cancellation signal, so a stale request cannot wait behind
+   old work or overwrite a newer draft. A request timeout does not disable the model;
+   repeated genuine runtime failures trigger only a short recoverable cooldown. Only
+   one transcription runs at once and CPU use is capped to at most six threads in the
+   portable build. The CLI remains a bounded process-level fallback.
 8. The hard user-visible budgets are provisional Review p95 below 2 seconds and final
    Review p95 below 5 seconds. A final Edge hypothesis may skip Whisper only when it
    has strong acoustic confidence, an explicit active-menu match, a safe order intent,
-   and a clear score margin. Otherwise local Small gets a 4.2-second pass budget.
+   and a clear score margin. After recording stops, a complete high-quality Edge
+   snapshot may also finish immediately for an explicit multi-product order or clear
+   question; scoped removals and corrections still use the local verifier. Otherwise
+   local Small gets a 4.2-second end-to-end queue/start/inference budget.
    Exceeding that budget may use only the same strict menu-grounded fallback; vague or
    noisy speech returns `TRANSCRIPTION_BUDGET_EXCEEDED` and mutates nothing.
 9. A shared hypothesis ranker combines acoustic confidence, phonetic distance,
@@ -40,6 +47,9 @@
    proposes only active same-family alternatives as waiter guidance. Substitution is
    never automatic.
 12. The temporary WAV and all JSON transcript candidates are removed after every request.
+    Runtime diagnostics store only allowlisted state, phase, duration and anonymous
+    references; audio, transcript, order text, table identity and operation identity are
+    never written to logs or the technical error registry.
 
 ## Word recognition safeguards
 

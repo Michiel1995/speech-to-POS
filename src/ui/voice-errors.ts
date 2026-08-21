@@ -84,6 +84,12 @@ const ERROR_MESSAGES: Partial<Record<string, UserFacingVoiceError>> = {
     message: "Installeer de nieuwste Service Ears-versie opnieuw; het bestaande concept blijft bewaard.",
     retryable: false,
   },
+  LOCAL_WHISPER_RUNTIME_UNAVAILABLE: {
+    code: "LOCAL_SPEECH_NOT_CONFIGURED",
+    title: "Lokale spraakmodule herstelt",
+    message: "De lokale spraakruntime wordt opnieuw opgebouwd. De opname en het bestaande concept bleven bewaard; probeer meteen opnieuw.",
+    retryable: true,
+  },
   STALE_MENU: {
     code: "INVALID_REQUEST",
     title: "Menukaart is vernieuwd",

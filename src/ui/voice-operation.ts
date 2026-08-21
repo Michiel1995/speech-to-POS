@@ -37,8 +37,15 @@ export function draftRevision(draft?: DraftOrder): string {
     draft.id,
     draft.updatedAt,
     draft.status,
-    draft.lines.map((line) => `${line.lineId}:${line.quantity}`).join(","),
-    draft.issues.map((issue) => issue.id).join(","),
+    draft.lines.map((line) => [
+      line.lineId,
+      line.productId,
+      line.quantity,
+      line.course,
+      line.modifiers.map((modifier) => `${modifier.groupId}:${modifier.optionId}`).sort().join("+"),
+      line.notes.join("+"),
+    ].join(":")).join(","),
+    draft.issues.map((issue) => `${issue.id}:${issue.type}:${issue.blocking}:${issue.lineId ?? ""}`).join(","),
   ].join("|");
   let hash = 2_166_136_261;
   for (let index = 0; index < value.length; index += 1) {

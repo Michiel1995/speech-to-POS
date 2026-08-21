@@ -1130,8 +1130,8 @@ export function VoiceOrderConsole() {
     const [warmed, interpretationReady] = await Promise.all([warmup, interpretationWarmup]);
     speechWarmupInFlight.current = false;
     if (!warmed) {
-      setSpeechWarmupState("ready");
-      setMicrophoneStatus((current) => `${current} · lokale controle activeert bij verwerking`);
+      setSpeechWarmupState("error");
+      setMicrophoneStatus((current) => `${current} · lokale controle herstelt bij verwerking`);
     } else {
       setSpeechWarmupState("ready");
       setMicrophoneStatus((current) => needsLocalWarmup ? `${current} · bestelklaar` : current);
@@ -1143,8 +1143,8 @@ export function VoiceOrderConsole() {
       if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
       speechWarmupTimer.current = window.setInterval(() => {
         void requestWarmup().then((stillWarm) => {
-          if (stillWarm) return;
-          setMicrophoneStatus("Bestelklaar · lokale controle activeert bij de volgende verwerking");
+          setSpeechWarmupState(stillWarm ? "ready" : "error");
+          if (!stillWarm) setMicrophoneStatus("Bestelklaar · lokale controle herstelt bij de volgende verwerking");
         });
       }, LOCAL_SPEECH_KEEPALIVE_MS);
     }

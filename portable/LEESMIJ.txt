@@ -1,12 +1,12 @@
-SERVICE EARS 3.5 — GEZONDHEIDSGECONTROLEERDE LOKALE TESTVERSIE
+SERVICE EARS 0.3.11 — GEZONDHEIDSGECONTROLEERDE LOKALE TESTVERSIE
 ================================================
 
 STARTEN
 1. Laat alle bestanden samen in deze map staan.
 2. Dubbelklik op Start-Service-Ears-Lokaal.cmd.
 3. De verborgen server wordt eerst gecontroleerd; pas daarna opent Microsoft Edge op http://127.0.0.1:3211/.
-4. Klik op Start dienst en geef microfoontoegang.
-5. Kies een tafel en klik Luister naar tafel.
+4. Geef microfoontoegang wanneer Edge daarom vraagt.
+5. Kies een tafel; luisteren start automatisch en bestellingen verschijnen in Review.
 
 Er is geen installatie, account, API-sleutel, abonnement of internet nodig.
 Ruwe audio bestaat alleen tijdelijk tijdens verwerking en wordt daarna verwijderd.

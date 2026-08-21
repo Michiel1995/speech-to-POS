@@ -144,23 +144,32 @@ function isWaiterConfirmation(text: string): boolean {
 }
 
 function isCorrection(text: string): boolean {
-  return /\b(nee wacht|maak daar|maak die|verander|in plaats van|non attends|no wait|change)\b/.test(normalizeSpoken(text));
+  return /\b(nee wacht|nee (?=(?:maak|maakt|bedoel|doe|zet))|sorry (?=(?:maak|bedoel|doe|zet))|ik bedoel|correctie|maak(?:t)? er|maak daar|maak die|verander|in plaats van|non attends|no wait|change)\b/.test(normalizeSpoken(text));
 }
 
-function isCancellation(text: string): boolean {
+function isCancellation(text: string, modifierCount = 0): boolean {
   const normalized = normalizeSpoken(text);
+  const explicitProductCancellation = /\b(?:hoef(?:t|ven)?.*(?:niet|geen)|laat.*(?:zitten|vallen)|annuleer|schrap|verwijder|cancel|remove|supprime|annule|haal.*(?:weg|eraf|er uit|uit de bestelling)|doe.*(?:toch\s+)?maar\s+niet|niet meer|don't need|do not need|leave .* out|laisse tomber|skip)\b/.test(normalized);
+  if (explicitProductCancellation) return true;
+  // “Geen kaas/saus/ijs” describes an orderable modifier and must never
+  // delete the product that carries it.
+  if (modifierCount > 0 && /\b(?:geen|zonder|no|without|sans)\b/.test(normalized)) return false;
   return [
     /\bgeen\b/,
-    /\bhoef(?:t|ven)?\b.*\b(?:niet|geen)\b/,
-    /\blaat\b.*\b(?:zitten|vallen)\b/,
-    /\b(?:annuleer|schrap|verwijder|cancel|remove|supprime|annule)\b/,
-    /\bhaal\b.*\b(?:weg|eraf|er uit|uit de bestelling)\b/,
-    /\bdoe\b.*\b(?:toch\s+)?maar\s+niet\b/,
     /\b(?:toch|maar)\s+niet\b/,
-    /\b(?:minder|niet meer)\b/,
-    /\b(?:don't need|do not need|leave .* out|laisse tomber)\b/,
-    /\bskip\b/,
+    /\bminder\b/,
   ].some((pattern) => pattern.test(normalized));
+}
+
+function selfCorrectionParts(text: string): [string, string] | undefined {
+  const normalized = normalizeSpoken(text);
+  const matches = [...normalized.matchAll(/\b(?:nee wacht|nee|sorry|ik bedoel|correctie)\b/g)]
+    .filter((match) => (match.index ?? 0) > 0);
+  const latest = matches.at(-1);
+  if (latest?.index === undefined) return undefined;
+  const before = normalized.slice(0, latest.index).replace(/[,.!?;:]+$/, "").trim();
+  const correction = normalized.slice(latest.index).trim();
+  return before && correction ? [before, correction] : undefined;
 }
 
 function explicitRemovalQuantity(text: string, mentionStart: number, mentionAlias: string): number | undefined {
@@ -297,7 +306,7 @@ function hasOrderingContext(
   const normalized = normalizeSpoken(text);
   if (productMentions.length === 0) return false;
   if (
-    /\b(geen|nooit|wil weten|willen weten|vraag stellen|is lekker|zijn lekker|smaakt|smaken|heet|heten|ik vind|wat vind|bedoel je|we hebben|jullie hebben|zij hebben|praat over|praten over|vertel over|grap|grapje|mop|verhaal|als voorbeeld|bij wijze van|droomde|gisteren|vroeger|niet mee|niet hier)\b/.test(normalized)
+    /\b(nooit|wil weten|willen weten|vraag stellen|is lekker|zijn lekker|smaakt|smaken|heet|heten|ik vind|wat vind|bedoel je|we hebben|jullie hebben|zij hebben|praat over|praten over|vertel over|grap|grapje|mop|verhaal|als voorbeeld|bij wijze van|droomde|gisteren|vroeger|niet mee|niet hier)\b/.test(normalized)
   ) {
     return false;
   }
@@ -349,6 +358,61 @@ function selectedModifier(mention: ModifierMention): SelectedModifier {
     canonicalName: mention.option.canonicalName,
     priceCents: mention.option.priceCents,
   };
+}
+
+function perUnitModifierSelections(
+  text: string,
+  quantity: number,
+  mentions: ModifierMention[],
+): SelectedModifier[][] | undefined {
+  if (quantity <= 1 || mentions.length === 0) return undefined;
+  const grouped = new Map<string, ModifierMention[]>();
+  for (const mention of mentions) {
+    const group = grouped.get(mention.group.id) ?? [];
+    group.push(mention);
+    grouped.set(mention.group.id, group);
+  }
+  const normalized = normalizeSpoken(text);
+  const scopedGroups = [...grouped.entries()].filter(([, groupMentions]) =>
+    groupMentions.length > 1 || groupMentions.some((mention) => {
+      const prefix = normalized.slice(Math.max(0, mention.start - 35), mention.start);
+      return /\b(?:waarvan|waaronder|eentje|ene|een|one|un|une|andere|other|autre)\b/.test(prefix);
+    }),
+  );
+  if (!scopedGroups.length) return undefined;
+
+  const profiles = Array.from({ length: quantity }, (): SelectedModifier[] => []);
+  const scopedGroupIds = new Set(scopedGroups.map(([groupId]) => groupId));
+  const common = mentions
+    .filter((mention) => !scopedGroupIds.has(mention.group.id))
+    .map(selectedModifier);
+  for (const profile of profiles) profile.push(...common);
+
+  for (const [, groupMentions] of scopedGroups) {
+    let nextProfile = 0;
+    for (const mention of groupMentions) {
+      const prefix = normalized.slice(Math.max(0, mention.start - 30), mention.start).trim();
+      const requested = [...prefix.split(/\s+/)].reverse().map(parseNumberToken).find(Boolean) ?? 1;
+      let targetIndex = nextProfile;
+      const local = normalized.slice(Math.max(0, mention.start - 18), Math.min(normalized.length, mention.end + 34));
+      if (/\b(?:andere|other|autre)\b/.test(local)) {
+        targetIndex = profiles.findIndex((profile) => !profile.some((modifier) => modifier.groupId === mention.group.id));
+      } else {
+        const referenced = profiles.findIndex((profile) => profile.some((modifier) =>
+          local.includes(normalizeSpoken(modifier.canonicalName)),
+        ));
+        if (referenced >= 0) targetIndex = referenced;
+      }
+      if (targetIndex < 0) targetIndex = nextProfile;
+      for (let index = 0; index < requested && targetIndex + index < profiles.length; index += 1) {
+        profiles[targetIndex + index] = profiles[targetIndex + index]
+          .filter((modifier) => modifier.groupId !== mention.group.id);
+        profiles[targetIndex + index].push(selectedModifier(mention));
+      }
+      nextProfile = Math.min(profiles.length, targetIndex + requested);
+    }
+  }
+  return profiles;
 }
 
 function unresolvedPhrase(text: string): string {
@@ -457,7 +521,7 @@ function shouldTreatAsModifierOnly(
   product: MenuProduct,
   earlierProducts: MenuProduct[],
 ): boolean {
-  if (product.id !== "POS-3101" || earlierProducts.length === 0) return false;
+  if (product.id !== "POS-3101" || !earlierProducts.some((candidate) => candidate.modifierGroupIds.includes("MG-SIDE"))) return false;
   const normalized = normalizeSpoken(text);
   const prefix = normalized.slice(Math.max(0, mentionStart - 18), mentionStart);
   return /\b(met|with|avec)\s*$/.test(prefix);
@@ -578,7 +642,14 @@ export function interpretDeterministically(
     notes: string[] = [],
     confidence = 0.94,
   ) => {
-    const existing = lines.find((line) => line.productId === product.id);
+    const selectionKey = (lineModifiers: SelectedModifier[], lineNotes: string[]) => [
+      ...lineModifiers.map((modifier) => `${modifier.groupId}:${modifier.optionId}`).sort(),
+      ...lineNotes.map((note) => `note:${note}`).sort(),
+    ].join("|");
+    const requestedSelection = selectionKey(modifiers, notes);
+    const existing = correction
+      ? [...lines].reverse().find((line) => line.productId === product.id)
+      : lines.find((line) => line.productId === product.id && selectionKey(line.modifiers, line.notes) === requestedSelection);
     if (existing) {
       existing.quantity = correction ? quantity : existing.quantity + quantity;
       for (const modifier of modifiers) {
@@ -616,6 +687,28 @@ export function interpretDeterministically(
     const finalChoice = finalDecisionClause(text);
     if (finalChoice) {
       processCustomerText(finalChoice);
+      return;
+    }
+    const selfCorrection = selfCorrectionParts(text);
+    if (selfCorrection) {
+      const [before, correctionText] = selfCorrection;
+      processCustomerText(before);
+      const correctionMentions = findProductMentions(correctionText, menu, {
+        existingProductIds: lines.map((line) => line.productId),
+      });
+      const absolute = normalizeSpoken(correctionText).match(/\b(?:maak|maakt|doe|zet)\s+(?:er|het|die|dat)\s+(\w+)\s+(?:van|in totaal)\b/);
+      const quantity = parseNumberToken(absolute?.[1]);
+      if (quantity && correctionMentions.length === 0) {
+        const precedingProduct = findProductMentions(before, menu).at(-1)?.candidates[0];
+        const target = precedingProduct
+          ? [...lines].reverse().find((line) => line.productId === precedingProduct.id)
+          : lines.length === 1 ? lines[0] : undefined;
+        if (target) {
+          target.quantity = quantity;
+          return;
+        }
+      }
+      processCustomerText(correctionText);
       return;
     }
     const undecidedDeliberation = isUndecidedDeliberation(text);
@@ -740,7 +833,8 @@ export function interpretDeterministically(
       return;
     }
 
-    if (isCancellation(text)) {
+    const cancellationModifierMentions = findModifierMentions(text, menu.modifierGroups);
+    if (isCancellation(text, cancellationModifierMentions.length)) {
       if (/\b(?:annuleer|schrap|verwijder|cancel|remove)\s+(?:de hele bestelling|alles)\b|\bhaal\s+alles\s+weg\b|\blaat\s+alles\s+maar\s+zitten\b/.test(normalized)) {
         lines.splice(0, lines.length);
         return;
@@ -900,7 +994,17 @@ export function interpretDeterministically(
       const quantity = quantityNearMention(text, mention.start, mention.end, correction);
       const notes = /apart|on the side|a part/.test(normalized) ? ["Serve specified sauce/side separately"] : [];
       const confidence = mention.confidence >= 1 ? 0.96 : Math.min(0.9, mention.confidence);
-      latestLine = addOrUpdateLine(product, quantity, uniqueModifiers, correction, notes, confidence);
+      const compatibleModifierMentions = modifierMentions
+        .filter((modifier) => product.modifierGroupIds.includes(modifier.group.id));
+      const perUnitModifiers = perUnitModifierSelections(text, quantity, compatibleModifierMentions);
+      if (perUnitModifiers) {
+        for (const selection of perUnitModifiers) {
+          latestLine = addOrUpdateLine(product, 1, selection, correction, notes, confidence);
+        }
+      } else {
+        latestLine = addOrUpdateLine(product, quantity, uniqueModifiers, correction, notes, confidence);
+      }
+      if (!latestLine) continue;
       if (mention.requiresConfirmation || ambiguousAudioMatch) {
         if (request.source === "audio") {
           issues.push({

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { createWhisperWarmupWav } from "@/src/speech/local-whisper-server";
+import {
+  createWhisperWarmupWav,
+  transitionLocalWhisperReadiness,
+  type LocalWhisperServerReadiness,
+} from "@/src/speech/local-whisper-server";
 
 describe("local Whisper inference warmup", () => {
   it("creates a valid bounded PCM16 mono WAV that can prime inference", () => {
@@ -20,5 +24,24 @@ describe("local Whisper inference warmup", () => {
   it("enforces a minimum warmup duration without allocating unbounded audio", () => {
     expect(createWhisperWarmupWav(0).byteLength).toBe(3_244);
     expect(createWhisperWarmupWav(1_000).byteLength).toBe(32_044);
+  });
+
+  it("models cold start, warm reuse and recovery without treating a request timeout as model failure", () => {
+    const idle: LocalWhisperServerReadiness = { state: "idle", coldStart: true, updatedAt: 0 };
+    const loading = transitionLocalWhisperReadiness(idle, { type: "start", modelId: "small" }, 1);
+    const timedOutRequest = transitionLocalWhisperReadiness(loading, { type: "request-timeout" }, 2);
+    const warm = transitionLocalWhisperReadiness(timedOutRequest, { type: "ready", modelId: "small" }, 3);
+    const recovering = transitionLocalWhisperReadiness(warm, {
+      type: "recover",
+      kind: "runtime-unavailable",
+    }, 4);
+    const reloading = transitionLocalWhisperReadiness(recovering, { type: "start", modelId: "small" }, 5);
+    const recovered = transitionLocalWhisperReadiness(reloading, { type: "ready", modelId: "small" }, 6);
+
+    expect(loading).toMatchObject({ state: "loading", coldStart: true });
+    expect(timedOutRequest).toMatchObject({ state: "loading", coldStart: true });
+    expect(warm).toMatchObject({ state: "ready", coldStart: false });
+    expect(recovering).toMatchObject({ state: "recovering", lastErrorKind: "runtime-unavailable" });
+    expect(recovered).toMatchObject({ state: "ready", coldStart: false, modelId: "small" });
   });
 });

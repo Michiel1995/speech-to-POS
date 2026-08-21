@@ -67,6 +67,11 @@ const TECHNICAL_EXPLANATIONS: Record<string, TechnicalExplanation> = {
     explanation: "De lokale transcriptiemotor kon de WAV-opname niet verwerken of het modelproces stopte onverwacht.",
     suggestedChecks: ["Controleer de lokale Whisper-processen", "Controleer model- en VAD-bestanden", "Bekijk de lokale serverlog rond deze foutreferentie"],
   },
+  LOCAL_WHISPER_RUNTIME_UNAVAILABLE: {
+    component: "Lokale modelruntime",
+    explanation: "Het lokale modelproces was tijdelijk niet beschikbaar. Een volgende opname mag dezelfde runtime opnieuw opbouwen; het model is niet door deze ene fout gedeactiveerd.",
+    suggestedChecks: ["Controleer runtime-readiness", "Controleer of één herstelproces actief is", "Herhaal een korte testopname"],
+  },
   LOCAL_SPEECH_BUSY: {
     component: "Lokale spraakwachtrij",
     explanation: "Een eerdere transcriptie hield de enige toegestane lokale transcriptieplaats nog bezet.",

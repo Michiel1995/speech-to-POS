@@ -16,6 +16,7 @@ import {
   type LocalWhisperSelection,
 } from "@/src/speech/local-model-manager";
 import {
+  LocalWhisperServerError,
   transcribeWithLocalWhisperServer,
   type WhisperServerVerboseJson,
 } from "@/src/speech/local-whisper-server";
@@ -50,6 +51,8 @@ export interface OfflineTranscriptionOptions {
   };
   preferLowLatency?: boolean;
   maxPassMs?: number;
+  maxQueueWaitMs?: number;
+  signal?: AbortSignal;
 }
 
 interface TranscriptionPass {
@@ -148,6 +151,19 @@ function whisperServerJson(value: WhisperServerVerboseJson): WhisperJson {
 
 function passQuality(pass: TranscriptionPass): number {
   return Math.log1p(Math.max(0, pass.score)) * 3 + pass.confidence * 5;
+}
+
+function isAbortError(error: unknown): boolean {
+  return (error instanceof DOMException || error instanceof Error) && error.name === "AbortError";
+}
+
+function isTranscriptionTimeout(error: unknown): boolean {
+  if (error instanceof LocalWhisperServerError) {
+    return error.kind === "startup-timeout" || error.kind === "inference-timeout";
+  }
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; killed?: unknown; signal?: unknown; name?: unknown };
+  return candidate.code === "ETIMEDOUT" || candidate.killed === true || candidate.name === "TimeoutError";
 }
 
 export interface OfflineTranscriptionHypothesis {
@@ -256,6 +272,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
   const workingDirectory = await mkdtemp(path.join(tmpdir(), "service-ears-speech-"));
   const audioPath = path.join(workingDirectory, "recording.wav");
   const processingStartedAt = performance.now();
+  const passDeadline = options.maxPassMs ? processingStartedAt + options.maxPassMs : undefined;
   let fallbackUsed = false;
   let persistentServerUsed = false;
 
@@ -281,8 +298,12 @@ async function transcribeHospitalityAudioOfflineUnlocked(
       const vadMinSilenceDurationMs = quietRecording ? 440 : noisyRecording ? 260 : profile === "primary" ? 300 : 420;
       const vadSpeechPadMs = quietRecording ? 280 : noisyRecording ? 160 : profile === "primary" ? 180 : 240;
       const vadSamplesOverlap = profile === "primary" ? 0.25 : 0.30;
-      const timeoutMs = options.maxPassMs
-        ? Math.max(1_500, Math.min(10_000, options.maxPassMs))
+      const remainingBudgetMs = passDeadline ? Math.floor(passDeadline - performance.now()) : undefined;
+      if (remainingBudgetMs !== undefined && remainingBudgetMs <= 0) {
+        throw new LocalWhisperServerError("Het transcriptiebudget was opgebruikt.", "inference-timeout");
+      }
+      const timeoutMs = remainingBudgetMs !== undefined
+        ? Math.max(1, Math.min(10_000, remainingBudgetMs))
         : Math.max(30_000, Math.min(90_000, selection.targetLatencyMs * 3));
       const args = [
         "-m", selection.path,
@@ -329,23 +350,36 @@ async function transcribeHospitalityAudioOfflineUnlocked(
           vadSpeechPadMs,
           vadSamplesOverlap,
           timeoutMs,
-          allowCliFallback: !options.maxPassMs,
+          allowCliFallback: true,
+          signal: options.signal,
         });
         if (serverResult) {
           persistentServerUsed = true;
           recordLocalWhisperPerformance(selection, performance.now() - passStartedAt, audioDurationSeconds, true);
           return { ...parseTranscription(whisperServerJson(serverResult), options.scoreTranscript), name, model: selection };
         }
+        const cliTimeoutMs = passDeadline
+          ? Math.max(1, Math.floor(passDeadline - performance.now()))
+          : timeoutMs;
+        if (cliTimeoutMs <= 1) {
+          throw new LocalWhisperServerError("Het transcriptiebudget was opgebruikt.", "inference-timeout");
+        }
         await execFileAsync(cliPath, args, {
           cwd: path.dirname(cliPath),
           encoding: "utf8",
           maxBuffer: 2 * 1024 * 1024,
-          timeout: timeoutMs,
+          timeout: cliTimeoutMs,
           windowsHide: true,
+          signal: options.signal,
         });
         recordLocalWhisperPerformance(selection, performance.now() - passStartedAt, audioDurationSeconds, true);
       } catch (error) {
-        recordLocalWhisperPerformance(selection, performance.now() - passStartedAt, audioDurationSeconds, false);
+        recordLocalWhisperPerformance(
+          selection,
+          performance.now() - passStartedAt,
+          audioDurationSeconds,
+          isTranscriptionTimeout(error) ? "timeout" : "runtime-error",
+        );
         throw error;
       }
       const parsed = JSON.parse(await readFile(`${outputBase}.json`, "utf8")) as WhisperJson;
@@ -356,30 +390,38 @@ async function transcribeHospitalityAudioOfflineUnlocked(
     try {
       primary = await runPass("primary", options.primaryPrompt, "primary", activeModel);
     } catch (error) {
-      if (options.maxPassMs) {
+      if (isAbortError(error)) throw error;
+      if (options.maxPassMs && isTranscriptionTimeout(error)) {
         throw new DomainError(
           "De lokale herkenning kon deze opname niet tijdig volledig uitschrijven. De bestaande bestelling bleef bewaard; probeer de uitspraak nogmaals, iets dichter bij de microfoon.",
           "TRANSCRIPTION_BUDGET_EXCEEDED",
           504,
         );
       }
+      if (options.maxPassMs) {
+        throw new DomainError(
+          "De lokale spraakruntime kon deze opname niet verwerken. De bestaande bestelling bleef bewaard; de runtime wordt bij de volgende opname opnieuw opgebouwd.",
+          "LOCAL_WHISPER_RUNTIME_UNAVAILABLE",
+          503,
+        );
+      }
       const fallback = selectLocalWhisperModel({}, [activeModel.id]);
       if (!fallback) {
-        const message = error instanceof Error ? error.message : String(error);
-        console.error("Offline transcription failed:", message);
+        console.error("Offline transcription failed without a fallback model.");
         throw new DomainError(
           "Lokale spraakherkenning kon de opname niet verwerken. Probeer opnieuw en spreek iets dichter bij de microfoon.",
           "OFFLINE_TRANSCRIPTION_FAILED",
           502,
         );
       }
-      console.warn(`Local speech model ${activeModel.id} failed; retrying with ${fallback.id}.`);
+      console.warn("Local speech model failed; retrying with the configured fallback tier.");
       activeModel = fallback;
       fallbackUsed = true;
       try {
         primary = await runPass("primary-fallback", options.primaryPrompt, "primary", activeModel);
       } catch (fallbackError) {
-        console.error("Offline transcription fallback failed:", fallbackError);
+        void fallbackError;
+        console.error("Offline transcription fallback failed.");
         throw new DomainError(
           "Lokale spraakherkenning kon de opname niet verwerken. Probeer opnieuw en spreek iets dichter bij de microfoon.",
           "OFFLINE_TRANSCRIPTION_FAILED",
@@ -402,7 +444,8 @@ async function transcribeHospitalityAudioOfflineUnlocked(
         const retryModel = strongestModel && strongestModel.id !== activeModel.id ? strongestModel : activeModel;
         retry = await runPass("context-retry", options.retryPrompt, "context", retryModel);
       } catch (error) {
-        console.warn("Context transcription retry failed; primary transcript remains active:", error);
+        void error;
+        console.warn("Context transcription retry failed; the primary transcript remains active.");
       }
     }
     const firstPasses = [primary, ...(retry ? [retry] : [])];
@@ -420,7 +463,8 @@ async function transcribeHospitalityAudioOfflineUnlocked(
       try {
         rescue = await runPass("acoustic-rescue", options.retryPrompt, "rescue", activeModel);
       } catch (error) {
-        console.warn("Acoustic rescue transcription failed; prior hypotheses remain active:", error);
+        void error;
+        console.warn("Acoustic rescue transcription failed; prior hypotheses remain active.");
       }
     }
     const passes = [...firstPasses, ...(rescue ? [rescue] : [])]
@@ -483,5 +527,22 @@ export async function transcribeHospitalityAudioOffline(
   file: File,
   options: OfflineTranscriptionOptions,
 ): Promise<OfflineTranscriptionResult> {
-  return withLocalSpeechCapacity(() => transcribeHospitalityAudioOfflineUnlocked(file, options));
+  const queuedAt = performance.now();
+  return withLocalSpeechCapacity(() => {
+    const queueElapsedMs = performance.now() - queuedAt;
+    const remainingPassMs = options.maxPassMs === undefined
+      ? undefined
+      : Math.floor(options.maxPassMs - queueElapsedMs);
+    if (remainingPassMs !== undefined && remainingPassMs <= 0) {
+      throw new DomainError(
+        "De lokale spraakmodule was nog bezig met de vorige opname. De huidige opname bleef bewaard; probeer meteen opnieuw.",
+        "LOCAL_SPEECH_BUSY",
+        429,
+      );
+    }
+    return transcribeHospitalityAudioOfflineUnlocked(file, { ...options, maxPassMs: remainingPassMs });
+  }, {
+    maxWaitMs: options.maxQueueWaitMs ?? (options.maxPassMs === undefined ? 5_000 : Math.min(650, options.maxPassMs)),
+    signal: options.signal,
+  });
 }

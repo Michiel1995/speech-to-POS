@@ -39,13 +39,42 @@ export interface WhisperServerPassOptions {
   vadSamplesOverlap: number;
   timeoutMs: number;
   allowCliFallback?: boolean;
+  signal?: AbortSignal;
 }
+
+export type LocalWhisperServerFailureKind = "startup-timeout" | "inference-timeout" | "runtime-unavailable";
+
+export class LocalWhisperServerError extends Error {
+  constructor(
+    message: string,
+    readonly kind: LocalWhisperServerFailureKind,
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "LocalWhisperServerError";
+  }
+}
+
+export interface LocalWhisperServerReadiness {
+  state: "idle" | "loading" | "ready" | "recovering" | "failed";
+  modelId?: string;
+  coldStart: boolean;
+  updatedAt: number;
+  lastErrorKind?: LocalWhisperServerFailureKind;
+}
+
+export type LocalWhisperReadinessEvent =
+  | { type: "start"; modelId: string }
+  | { type: "ready"; modelId: string }
+  | { type: "request-timeout" }
+  | { type: "recover"; kind: LocalWhisperServerFailureKind; modelId?: string }
+  | { type: "fail"; kind: LocalWhisperServerFailureKind; modelId?: string }
+  | { type: "stop" };
 
 interface RunningWhisperServer {
   modelId: string;
   origin: string;
   process: ChildProcess;
-  logTail: string;
   startupError?: Error;
   ready?: Promise<void>;
   prime?: Promise<void>;
@@ -54,6 +83,32 @@ interface RunningWhisperServer {
 
 let runningServer: RunningWhisperServer | undefined;
 let cleanupRegistered = false;
+let readiness: LocalWhisperServerReadiness = {
+  state: "idle",
+  coldStart: true,
+  updatedAt: Date.now(),
+};
+
+export function localWhisperServerReadiness(): LocalWhisperServerReadiness {
+  return { ...readiness };
+}
+
+export function transitionLocalWhisperReadiness(
+  current: LocalWhisperServerReadiness,
+  event: LocalWhisperReadinessEvent,
+  now = Date.now(),
+): LocalWhisperServerReadiness {
+  if (event.type === "request-timeout") return { ...current, updatedAt: now };
+  if (event.type === "start") return { state: "loading", modelId: event.modelId, coldStart: true, updatedAt: now };
+  if (event.type === "ready") return { state: "ready", modelId: event.modelId, coldStart: false, updatedAt: now };
+  if (event.type === "recover") return { state: "recovering", modelId: event.modelId ?? current.modelId, coldStart: true, updatedAt: now, lastErrorKind: event.kind };
+  if (event.type === "fail") return { state: "failed", modelId: event.modelId ?? current.modelId, coldStart: true, updatedAt: now, lastErrorKind: event.kind };
+  return { state: "idle", coldStart: true, updatedAt: now };
+}
+
+function moveReadiness(event: LocalWhisperReadinessEvent): void {
+  readiness = transitionLocalWhisperReadiness(readiness, event);
+}
 
 function configuredServerPath(): string | undefined {
   const configured = process.env.LOCAL_WHISPER_SERVER;
@@ -74,11 +129,17 @@ function freePort(): Promise<number> {
   });
 }
 
-function stopWhisperServer(): void {
+function stopWhisperServer(
+  nextState: LocalWhisperServerReadiness["state"] = "idle",
+  failureKind: LocalWhisperServerFailureKind = "runtime-unavailable",
+): void {
   if (!runningServer) return;
   if (runningServer.idleTimer) clearTimeout(runningServer.idleTimer);
   if (!runningServer.process.killed) runningServer.process.kill();
   runningServer = undefined;
+  if (nextState === "recovering") moveReadiness({ type: "recover", kind: failureKind });
+  else if (nextState === "failed") moveReadiness({ type: "fail", kind: readiness.lastErrorKind ?? "runtime-unavailable" });
+  else moveReadiness({ type: "stop" });
 }
 
 function registerCleanup(): void {
@@ -104,7 +165,7 @@ async function waitUntilReady(server: RunningWhisperServer): Promise<void> {
   while (Date.now() < deadline) {
     if (server.startupError) throw server.startupError;
     if (server.process.exitCode !== null) {
-      throw new Error(`Lokale spraakserver stopte tijdens het laden. ${server.logTail.slice(-1_000)}`);
+      throw new LocalWhisperServerError("Lokale spraakserver stopte tijdens het laden.", "runtime-unavailable");
     }
     try {
       const response = await fetch(`${server.origin}/`, { signal: AbortSignal.timeout(1_000) });
@@ -114,15 +175,55 @@ async function waitUntilReady(server: RunningWhisperServer): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Lokale spraakserver startte niet op tijd. ${server.logTail.slice(-1_000)}`);
+  throw new LocalWhisperServerError("Lokale spraakserver startte niet binnen de maximale opstarttijd.", "startup-timeout");
 }
 
-async function ensureWhisperServer(selection: LocalWhisperSelection): Promise<RunningWhisperServer | undefined> {
+function abortError(): DOMException {
+  return new DOMException("Spraakverwerking geannuleerd.", "AbortError");
+}
+
+async function waitWithinBudget<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  kind: LocalWhisperServerFailureKind,
+): Promise<T> {
+  if (signal?.aborted) throw abortError();
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      callback();
+    };
+    const abort = () => finish(() => reject(abortError()));
+    const timer = setTimeout(() => finish(() => reject(new LocalWhisperServerError(
+      kind === "startup-timeout"
+        ? "Het lokale model was niet tijdig klaar."
+        : "De lokale transcriptie overschreed haar tijdsbudget.",
+      kind,
+    ))), Math.max(1, timeoutMs));
+    timer.unref();
+    signal?.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => finish(() => resolve(value)),
+      (error) => finish(() => reject(error)),
+    );
+  });
+}
+
+async function ensureWhisperServer(
+  selection: LocalWhisperSelection,
+  maxWaitMs = 45_000,
+  signal?: AbortSignal,
+): Promise<RunningWhisperServer | undefined> {
   const serverPath = configuredServerPath();
   if (!serverPath) return undefined;
   if (runningServer?.modelId === selection.id && runningServer.process.exitCode === null) {
     const existing = runningServer;
-    await existing.ready;
+    await waitWithinBudget(existing.ready ?? Promise.resolve(), maxWaitMs, signal, "startup-timeout");
     if (existing.startupError || existing.process.exitCode !== null || runningServer !== existing) {
       throw existing.startupError ?? new Error("Lokale spraakserver stopte tijdens het laden.");
     }
@@ -164,13 +265,12 @@ async function ensureWhisperServer(selection: LocalWhisperSelection): Promise<Ru
     modelId: selection.id,
     origin: `http://127.0.0.1:${port}`,
     process: child,
-    logTail: "",
   };
-  const appendLog = (chunk: Buffer) => {
-    server.logTail = `${server.logTail}${chunk.toString("utf8")}`.slice(-8_000);
-  };
-  child.stdout?.on("data", appendLog);
-  child.stderr?.on("data", appendLog);
+  moveReadiness({ type: "start", modelId: selection.id });
+  // Drain provider output without retaining it: whisper.cpp may echo decoded
+  // text, which must never enter application logs or diagnostics.
+  child.stdout?.resume();
+  child.stderr?.resume();
   child.once("error", (error) => {
     server.startupError = error;
     if (runningServer === server) runningServer = undefined;
@@ -180,13 +280,30 @@ async function ensureWhisperServer(selection: LocalWhisperSelection): Promise<Ru
   });
   runningServer = server;
   registerCleanup();
-  server.ready = waitUntilReady(server);
+  server.ready = waitUntilReady(server).then(() => {
+    if (runningServer === server) moveReadiness({ type: "ready", modelId: selection.id });
+  }).catch((error) => {
+    const failure = error instanceof LocalWhisperServerError
+      ? error
+      : new LocalWhisperServerError("De lokale spraakserver kon niet starten.", "runtime-unavailable", error);
+    if (runningServer === server) {
+      moveReadiness({ type: "fail", modelId: selection.id, kind: failure.kind });
+      stopWhisperServer("failed");
+    }
+    throw failure;
+  });
   try {
-    await server.ready;
+    await waitWithinBudget(server.ready, maxWaitMs, signal, "startup-timeout");
     scheduleIdleUnload(server);
     return server;
   } catch (error) {
-    stopWhisperServer();
+    // A request deadline must not kill the shared single-flight warmup. A
+    // later request can reuse the model as soon as that same load completes.
+    if (error instanceof LocalWhisperServerError && error.kind === "startup-timeout") {
+      moveReadiness({ type: "request-timeout" });
+    } else if (runningServer === server) {
+      stopWhisperServer("recovering");
+    }
     throw error;
   }
 }
@@ -199,8 +316,8 @@ export async function warmLocalWhisperServer(selection: LocalWhisperSelection): 
     await server.prime;
     scheduleIdleUnload(server);
     return true;
-  } catch (error) {
-    console.warn("Lokale spraakserver kon niet vooraf worden geladen; de normale fallback blijft beschikbaar:", error);
+  } catch {
+    console.warn("Lokale spraakserver kon niet vooraf worden geladen; herstel blijft beschikbaar bij de volgende opname.");
     stopWhisperServer();
     return false;
   }
@@ -263,8 +380,13 @@ export async function transcribeWithLocalWhisperServer(
 ): Promise<WhisperServerVerboseJson | undefined> {
   let server: RunningWhisperServer | undefined;
   try {
-    server = await ensureWhisperServer(selection);
+    const startedAt = performance.now();
+    server = await ensureWhisperServer(selection, options.timeoutMs, options.signal);
     if (!server) return undefined;
+    if (server.prime) {
+      const remainingPrimeMs = Math.max(1, options.timeoutMs - (performance.now() - startedAt));
+      await waitWithinBudget(server.prime, remainingPrimeMs, options.signal, "startup-timeout");
+    }
     if (server.idleTimer) clearTimeout(server.idleTimer);
     const form = new FormData();
     form.append("file", new Blob([audio], { type: "audio/wav" }), "recording.wav");
@@ -290,19 +412,26 @@ export async function transcribeWithLocalWhisperServer(
       append(form, "vad_speech_pad_ms", options.vadSpeechPadMs);
       append(form, "vad_samples_overlap", options.vadSamplesOverlap);
     }
-    const response = await fetch(`${server.origin}/inference`, {
+    const remainingMs = Math.max(1, options.timeoutMs - (performance.now() - startedAt));
+    const response = await waitWithinBudget(fetch(`${server.origin}/inference`, {
       method: "POST",
       body: form,
-      signal: AbortSignal.timeout(options.timeoutMs),
-    });
+      signal: options.signal,
+    }), remainingMs, options.signal, "inference-timeout");
     if (!response.ok) {
       throw new Error(`Lokale spraakserver gaf status ${response.status}: ${(await response.text()).slice(0, 500)}`);
     }
     return await response.json() as WhisperServerVerboseJson;
   } catch (error) {
-    console.warn("Persistent local whisper server unavailable; using CLI fallback:", error);
-    stopWhisperServer();
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    const failure = error instanceof LocalWhisperServerError
+      ? error
+      : new LocalWhisperServerError("De lokale spraakserver is niet beschikbaar.", "runtime-unavailable", error);
+    // Startup may continue in the single shared background load. An inference
+    // timeout can leave whisper.cpp occupied, so that process is restarted.
+    if (failure.kind !== "startup-timeout") stopWhisperServer("recovering", failure.kind);
     if (options.allowCliFallback === false) throw error;
+    if (failure.kind === "inference-timeout") throw failure;
     return undefined;
   } finally {
     if (server && runningServer === server) scheduleIdleUnload(server);

@@ -36,6 +36,8 @@ interface ModelRuntimeMeasurement {
   lastReason?: string;
 }
 
+export type LocalWhisperPerformanceOutcome = "success" | "timeout" | "runtime-error";
+
 export interface LocalSpeechRuntimeStatus {
   configured: boolean;
   policy: "adaptive" | "fixed";
@@ -241,8 +243,11 @@ export function recordLocalWhisperPerformance(
   selection: LocalWhisperSelection,
   elapsedMs: number,
   audioDurationSeconds: number,
-  succeeded: boolean,
+  outcome: boolean | LocalWhisperPerformanceOutcome,
 ): void {
+  const normalizedOutcome: LocalWhisperPerformanceOutcome = typeof outcome === "boolean"
+    ? outcome ? "success" : "runtime-error"
+    : outcome;
   const current = runtimeMeasurements.get(selection.id) ?? {
     runs: 0,
     failures: 0,
@@ -256,12 +261,16 @@ export function recordLocalWhisperPerformance(
   current.runs = runs;
   current.averageProcessingMs = current.averageProcessingMs * (1 - weight) + elapsedMs * weight;
   current.averageRealtimeFactor = current.averageRealtimeFactor * (1 - weight) + realtimeFactor * weight;
-  if (!succeeded) {
+  if (normalizedOutcome === "runtime-error") {
     current.failures += 1;
-    current.slowStreak += 2;
-    current.disabledUntil = Date.now() + 30 * 60 * 1_000;
-    current.lastReason = "tijdelijk uitgeschakeld na een verwerkingsfout";
-  } else {
+    // A single process hiccup must remain recoverable. Only repeated, genuine
+    // runtime failures cool the model down; request-budget timeouts never do.
+    if (current.failures >= 2) {
+      current.disabledUntil = Date.now() + 30 * 1_000;
+      current.lastReason = "kort teruggeschakeld na herhaalde runtimefouten";
+    }
+  } else if (normalizedOutcome === "success") {
+    current.failures = 0;
     const slow = elapsedMs > selection.targetLatencyMs || (audioDurationSeconds >= 8 && realtimeFactor > 2.5);
     current.slowStreak = slow ? current.slowStreak + 1 : 0;
     if (current.slowStreak >= 2 || elapsedMs > selection.targetLatencyMs * 2.5) {
@@ -318,9 +327,17 @@ export function localSpeechRuntimeStatus(overrides: ModelDiscoveryOptions = {}):
 
 let activeTranscriptions = 0;
 let queuedTranscriptions = 0;
-const transcriptionWaiters: Array<() => void> = [];
+interface TranscriptionWaiter {
+  activate: () => void;
+  cancel: (reason: unknown) => void;
+}
+const transcriptionWaiters: TranscriptionWaiter[] = [];
 
-export async function withLocalSpeechCapacity<T>(operation: () => Promise<T>): Promise<T> {
+export async function withLocalSpeechCapacity<T>(
+  operation: () => Promise<T>,
+  options: { maxWaitMs?: number; signal?: AbortSignal } = {},
+): Promise<T> {
+  if (options.signal?.aborted) throw new DOMException("Spraakverwerking geannuleerd.", "AbortError");
   if (activeTranscriptions > 0) {
     if (queuedTranscriptions >= 2) {
       throw new DomainError(
@@ -330,15 +347,54 @@ export async function withLocalSpeechCapacity<T>(operation: () => Promise<T>): P
       );
     }
     queuedTranscriptions += 1;
-    await new Promise<void>((resolve) => transcriptionWaiters.push(resolve));
-    queuedTranscriptions -= 1;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      let abort = () => {};
+      const cleanup = () => {
+        if (timer) clearTimeout(timer);
+        options.signal?.removeEventListener("abort", abort);
+      };
+      const remove = (waiter: TranscriptionWaiter) => {
+        const index = transcriptionWaiters.indexOf(waiter);
+        if (index >= 0) transcriptionWaiters.splice(index, 1);
+      };
+      const waiter: TranscriptionWaiter = {
+        activate: () => {
+          if (settled) return;
+          settled = true;
+          queuedTranscriptions -= 1;
+          cleanup();
+          resolve();
+        },
+        cancel: (reason) => {
+          if (settled) return;
+          settled = true;
+          queuedTranscriptions -= 1;
+          remove(waiter);
+          cleanup();
+          reject(reason);
+        },
+      };
+      abort = () => waiter.cancel(new DOMException("Spraakverwerking geannuleerd.", "AbortError"));
+      transcriptionWaiters.push(waiter);
+      options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.maxWaitMs !== undefined) {
+        timer = setTimeout(() => waiter.cancel(new DomainError(
+          "De lokale spraakmodule is nog bezig met de vorige opname. De huidige opname bleef bewaard; probeer meteen opnieuw.",
+          "LOCAL_SPEECH_BUSY",
+          429,
+        )), Math.max(0, options.maxWaitMs));
+        timer.unref();
+      }
+    });
   }
   activeTranscriptions += 1;
   try {
     return await operation();
   } finally {
     activeTranscriptions -= 1;
-    transcriptionWaiters.shift()?.();
+    transcriptionWaiters.shift()?.activate();
   }
 }
 

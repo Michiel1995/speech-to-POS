@@ -93,6 +93,13 @@ export function buildSpeechVocabulary(
   const modifierPhrases = menu.modifierGroups.flatMap((group) =>
     group.options.flatMap((option) => [option.canonicalName, option.aliases[0]].filter((value): value is string => Boolean(value))),
   );
+  const priorityModifierPhrases = [
+    "frieten", "pepersaus", "zonder ijs", "weinig ijs", "met citroen",
+    "geen saus", "zonder kaas", "geen mayonaise", "ketchup",
+  ];
+  const remainingModifierPhrases = modifierPhrases.filter((phrase) =>
+    !priorityModifierPhrases.includes(phrase.toLocaleLowerCase("nl-BE")),
+  );
   const promptLimit = Math.max(300, options.maxPromptChars ?? DEFAULT_PROMPT_LIMIT);
 
   const dialectProfile = options.dialectProfile ?? "auto";
@@ -108,12 +115,12 @@ export function buildSpeechVocabulary(
     // Menu pronunciations must precede broad culinary knowledge. The prompt
     // has a strict token budget; putting general dishes first used to evict
     // variants such as "leven blond" and "vol over vent" from busy menus.
-    [...preferredPronunciations, ...learnedPronunciations, ...modifierPhrases, ...menuCorePhrases, ...aliasesRoundRobin, ...posNames, ...broadCulinaryPhrases],
+    [...preferredPronunciations, ...learnedPronunciations, ...priorityModifierPhrases, ...menuCorePhrases, ...aliasesRoundRobin, ...remainingModifierPhrases, ...posNames, ...broadCulinaryPhrases],
     promptLimit,
   );
   const retryPrompt = fitPrompt(
     "Luister opnieuw en transcribeer letterlijk; een gevraagd gerecht kan buiten het POS-menu vallen. Mogelijke kaartnamen, algemene gerechten en uitspraakvarianten zijn:",
-    [...preferredPronunciations, ...learnedPronunciations, ...modifierPhrases, ...menuCorePhrases, ...aliasesRoundRobin, ...posNames, ...broadCulinaryPhrases],
+    [...preferredPronunciations, ...learnedPronunciations, ...priorityModifierPhrases, ...menuCorePhrases, ...aliasesRoundRobin, ...remainingModifierPhrases, ...posNames, ...broadCulinaryPhrases],
     promptLimit,
   );
 

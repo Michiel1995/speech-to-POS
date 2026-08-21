@@ -1,6 +1,6 @@
 import type { TenantMenu } from "@/src/domain/schemas";
 import { normalizeFlemish, type DialectProfile } from "@/src/language/flemish-dialect";
-import { findProductMentions } from "@/src/semantic-menu/matcher";
+import { findModifierMentions, findProductMentions } from "@/src/semantic-menu/matcher";
 
 export const CONVERSATION_INTENTS = [
   "order",
@@ -102,6 +102,7 @@ export function routeIntent(
       existingProductIds: options.existingProductIds,
     })
     : [];
+  const modifierMentions = options.menu ? findModifierMentions(normalizedText, options.menu.modifierGroups) : [];
   const productIds = options.menu
     ? [...new Set(productMentions.flatMap((mention) => mention.candidates.map((product) => product.id)))]
     : [];
@@ -134,7 +135,9 @@ export function routeIntent(
     return result("menu_question", 0.96, ["menu-question"]);
   }
   if (REPLACEMENT_CUE.test(normalizedText)) return result("replacement", 0.98, ["replacement-cue"]);
-  if (REMOVAL_CUE.test(normalizedText) && (productIds.length > 0 || options.hasOrder)) return result("removal", 0.97, ["removal-cue"]);
+  const explicitRemovalAction = /\b(?:hoef(?:t|ven)?.*(?:niet|geen)|laat.*(?:zitten|vallen)|annuleer|schrap|verwijder|cancel|remove|supprime|haal.*(?:weg|eraf|er uit)|doe.*maar niet|niet meer|skip)\b/.test(normalizedText);
+  const negativeModifierOnly = modifierMentions.length > 0 && !explicitRemovalAction;
+  if (REMOVAL_CUE.test(normalizedText) && !negativeModifierOnly && (productIds.length > 0 || options.hasOrder)) return result("removal", 0.97, ["removal-cue"]);
   if (CORRECTION_CUE.test(normalizedText) && (productIds.length > 0 || options.hasOrder)) return result("correction", 0.92, ["correction-cue"]);
   if (ADDITION_CUE.test(normalizedText) && (productIds.length > 0 || options.hasContext)) return result("addition", 0.96, ["addition-cue"]);
   if (CONTEXT_ACCEPTANCE.test(normalizedText) && options.hasContext) return result("order", 0.9, ["context-acceptance"]);

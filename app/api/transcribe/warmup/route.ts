@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { apiError } from "@/src/http/api-error";
 import { selectLocalWhisperEntryModel } from "@/src/speech/local-model-manager";
-import { warmLocalWhisperServer } from "@/src/speech/local-whisper-server";
+import { localWhisperServerReadiness, warmLocalWhisperServer } from "@/src/speech/local-whisper-server";
 
 export const runtime = "nodejs";
 
@@ -15,6 +15,7 @@ export async function POST() {
     const warmed = await warmLocalWhisperServer(entry);
     return NextResponse.json({
       warmed,
+      readiness: localWhisperServerReadiness(),
       model: { id: entry.id, label: entry.label, tier: entry.tier },
     });
   } catch (error) {

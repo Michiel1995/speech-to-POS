@@ -119,6 +119,46 @@ describe("adaptive local Whisper model selection", () => {
     expect(localSpeechRuntimeStatus({ ...options, now: Date.now() + 1 }).installedModels[0]).toMatchObject({ eligible: false });
   });
 
+  it("does not disable a healthy model merely because one request budget expired", () => {
+    const options = {
+      fixedModelPath: path.join(directory, "ggml-small-q5_1.bin"),
+      modelDirectories: [directory],
+      totalMemoryMb: 16 * 1024,
+      freeMemoryMb: 8 * 1024,
+      logicalProcessors: 14,
+      policy: "adaptive" as const,
+      now: Date.now(),
+    };
+    const selected = selectLocalWhisperModel(options)!;
+    recordLocalWhisperPerformance(selected, 4_200, 12, "timeout");
+    expect(selectLocalWhisperModel({ ...options, now: Date.now() + 1 })?.id).toBe(selected.id);
+  });
+
+  it("recovers from a single runtime failure without hiding the model", () => {
+    const options = {
+      fixedModelPath: path.join(directory, "ggml-small-q5_1.bin"),
+      modelDirectories: [directory],
+      totalMemoryMb: 16 * 1024,
+      freeMemoryMb: 8 * 1024,
+      logicalProcessors: 14,
+      policy: "adaptive" as const,
+      now: Date.now(),
+    };
+    const selected = selectLocalWhisperModel(options)!;
+    recordLocalWhisperPerformance(selected, 500, 2, "runtime-error");
+    expect(selectLocalWhisperModel({ ...options, now: Date.now() + 1 })?.id).toBe(selected.id);
+  });
+
+  it("bounds a queued request instead of waiting behind stale heavy work", async () => {
+    let releaseFirst!: () => void;
+    const first = withLocalSpeechCapacity(() => new Promise<string>((resolve) => { releaseFirst = () => resolve("first"); }));
+    await expect(withLocalSpeechCapacity(async () => "late", { maxWaitMs: 5 })).rejects.toMatchObject({
+      code: "LOCAL_SPEECH_BUSY",
+    });
+    releaseFirst();
+    await expect(first).resolves.toBe("first");
+  });
+
   it("queues local work and rejects excess load instead of starting parallel heavy jobs", async () => {
     let releaseFirst!: () => void;
     const first = withLocalSpeechCapacity(() => new Promise<string>((resolve) => { releaseFirst = () => resolve("first"); }));

@@ -7,6 +7,7 @@ import { speechTranscriptMenuScore } from "@/src/semantic-menu/matcher";
 import { isOrderableProduct } from "@/src/semantic-menu/product-index";
 import { buildSpeechVocabulary } from "@/src/speech/menu-vocabulary";
 import {
+  completeBrowserSpeechFallback,
   confidentBrowserSpeechFallback,
   rankSpeechHypotheses,
   safeBrowserSpeechFallback,
@@ -109,7 +110,7 @@ export async function POST(request: Request) {
     };
     const edgeResponse = (
       fallback: NonNullable<ReturnType<typeof safeBrowserSpeechFallback>>,
-      pass: "edge-live-confident" | "edge-live-budget-fallback",
+      pass: "edge-live-confident" | "edge-live-complete" | "edge-live-budget-fallback",
     ) => {
       const rankedFallbacks = rankSpeechHypotheses(browserCandidates, menu, rankingOptions);
       return NextResponse.json({
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
           selected: "edge-live-preview",
           margin: speechHypothesisMargin(rankedFallbacks),
           fallbackUsed: pass === "edge-live-budget-fallback",
-          localPassSkipped: pass === "edge-live-confident",
+          localPassSkipped: pass !== "edge-live-budget-fallback",
         },
         retained: false,
       });
@@ -148,6 +149,8 @@ export async function POST(request: Request) {
       ? confidentBrowserSpeechFallback(browserCandidates, menu, rankingOptions)
       : undefined;
     if (confidentBrowser) return edgeResponse(confidentBrowser, "edge-live-confident");
+    const completeBrowser = completeBrowserSpeechFallback(browserCandidates, menu, rankingOptions);
+    if (completeBrowser) return edgeResponse(completeBrowser, "edge-live-complete");
     let result: OfflineTranscriptionResult;
     try {
       result = await transcribeHospitalityAudioOffline(audio, {
@@ -168,6 +171,8 @@ export async function POST(request: Request) {
         maxPassMs: browserCandidates.length > 0
           ? FINAL_TRANSCRIPTION_BUDGET_MS
           : LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
+        maxQueueWaitMs: 650,
+        signal: request.signal,
       });
     } catch (error) {
       // Keep a useful menu/context-grounded live hypothesis when the local

@@ -76,7 +76,7 @@ fs.mkdirSync(path.join(browserTarget, "node"), { recursive: true });
 fs.copyFileSync(nodeExecutable, path.join(browserTarget, "node", "node.exe"));
 copy(path.join(projectRoot, "browser-test", "Start-Service-Ears-Browsertest.cmd"), path.join(browserTarget, "Start-Service-Ears-Browsertest.cmd"));
 copy(path.join(projectRoot, "browser-test", "LEESMIJ.txt"), path.join(browserTarget, "LEESMIJ.txt"));
-fs.writeFileSync(path.join(browserTarget, "VERSIE.txt"), "Service Ears 3.5 browsertest\r\nStabiele voorlopige Review, monotone bewerkingen, lokale p50/p95-meting en POS read-back\r\n", "utf8");
+fs.writeFileSync(path.join(browserTarget, "VERSIE.txt"), "Service Ears 0.3.11 browsertest\r\nStabiele voorlopige Review, monotone bewerkingen, lokale p50/p95-meting en POS read-back\r\n", "utf8");
 const browserIntegrity = sealPackage(browserTarget);
 
 function syncSpeech(destination, includeStrongModel) {
@@ -103,8 +103,8 @@ function prepareLocalPackage(name, includeStrongModel) {
   fs.writeFileSync(
     path.join(target, "VERSIE.txt"),
     includeStrongModel
-      ? "Service Ears 3.5 adaptief lokaal\r\nVoorverwarmde Small-route + Large-v3 Turbo-controle bij echte twijfel + ruisadaptieve Silero VAD\r\nVoorlopige Review, race-veilige bewerkingen, versieerbaar herstel en bevestigde POS read-back\r\n"
-      : "Service Ears 3.5 licht lokaal\r\nVoorverwarmde Small Q5 + ruisadaptieve Silero VAD\r\nVoorlopige Review, race-veilige bewerkingen, versieerbaar herstel en bevestigde POS read-back\r\n",
+      ? "Service Ears 0.3.11 adaptief lokaal\r\nVoorverwarmde Small-route + Large-v3 Turbo-controle bij echte twijfel + ruisadaptieve Silero VAD\r\nVoorlopige Review, race-veilige bewerkingen, versieerbaar herstel en bevestigde POS read-back\r\n"
+      : "Service Ears 0.3.11 licht lokaal\r\nVoorverwarmde Small Q5 + ruisadaptieve Silero VAD\r\nVoorlopige Review, race-veilige bewerkingen, versieerbaar herstel en bevestigde POS read-back\r\n",
     "utf8",
   );
   return { target, integrity: sealPackage(target) };
