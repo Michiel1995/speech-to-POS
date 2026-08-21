@@ -88,6 +88,19 @@ describe("Service Ears 3 word recognition", () => {
     expect(routed.intent).toBe("non_order");
   });
 
+  it("does not hallucinate Plaice from replacement grammar", () => {
+    const replacementMentions = findProductMentions(
+      "In plaats van het voorgerecht een hamburger bestellen.",
+      demoMenu,
+      { existingProductIds: ["POS-2001"] },
+    );
+    const ids = replacementMentions.flatMap((mention) => mention.candidates.map((product) => product.id));
+
+    expect(ids).toContain("POS-3006");
+    expect(ids).not.toContain("POS-3005");
+    expect(findProductMentions("Ik neem de plaice.", demoMenu)[0]?.candidates[0]?.id).toBe("POS-3005");
+  });
+
   it("uses the hard fast-final gate only for strong, explicit menu grounding", () => {
     expect(confidentBrowserSpeechFallback([
       { text: "Doe mij twee Duvel", acousticConfidence: 0.74 },

@@ -347,6 +347,59 @@ describe("deterministic hospitality order engine", () => {
     expect(draft.lines).toMatchObject([{ productId: "POS-1102", quantity: 1 }]);
   });
 
+  it.each([
+    "In plaats van het voorgerecht een hamburger bestellen.",
+    "Vervang het voorgerecht door een hamburger.",
+    "In plaats van de garnaalkroketten wil ik een burger.",
+    "Doe de garnaalkroketten weg en geef mij een hamburger.",
+    "Ik wil toch liever een hamburger dan de garnaalkroketten.",
+    "Wissel het voorgerecht voor een hamburger.",
+    "Maak daar een hamburger van.",
+    "Het voorgerecht hoeft toch niet meer, doe mij een hamburger.",
+    "Geen voorgerecht meer, wel een hamburger.",
+    "Replace the starter with a hamburger.",
+    "Instead of the starter I will have a hamburger.",
+    "Swap the starter for a hamburger.",
+    "Skip the starter, I'll take a hamburger instead.",
+    "Remplacez l'entree par un hamburger.",
+    "A la place de l'entree je prends un hamburger.",
+    "Pas l'entree, je prends un hamburger plutot.",
+  ])("replaces the existing starter with a hamburger in a natural conversation: %s", (spoken) => {
+    const first = interpret([customer("Een garnaalkroket graag.")]);
+    const corrected = interpret([customer(spoken)], first.lines);
+
+    expect(corrected.lines).toMatchObject([{ productId: "POS-3006", quantity: 1 }]);
+    expect(corrected.lines).toHaveLength(1);
+    expect(corrected.issues).toHaveLength(0);
+  });
+
+  it("does not add a replacement when the referenced course is absent", () => {
+    const first = interpret([customer("Een Duvel graag.")]);
+    const corrected = interpret([customer("Vervang het voorgerecht door een hamburger.")], first.lines);
+
+    expect(corrected.lines.map((line) => line.productId)).toEqual(["POS-1001"]);
+    expect(corrected.issues).toMatchObject([{ type: "unresolved_product", blocking: true }]);
+  });
+
+  it("keeps the old line when the requested replacement is not on the active menu", () => {
+    const first = interpret([customer("Een garnaalkroket graag.")]);
+    const corrected = interpret([customer("Vervang het voorgerecht door een kreeftenpasta.")], first.lines);
+
+    expect(corrected.lines.map((line) => line.productId)).toEqual(["POS-2001"]);
+    expect(corrected.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "unresolved_product", blocking: true }),
+    ]));
+  });
+
+  it("asks which line to replace when several lines occupy the referenced course", () => {
+    const first = interpret([customer("Een garnaalkroket en een hamburger graag.")]);
+    const priorLines = first.lines.map((line) => ({ ...line, course: "starter" as const }));
+    const corrected = interpret([customer("Vervang het voorgerecht door een koffie.")], priorLines);
+
+    expect(corrected.lines.map((line) => line.productId).sort()).toEqual(["POS-2001", "POS-3006"]);
+    expect(corrected.issues).toMatchObject([{ type: "ambiguous_removal", blocking: true }]);
+  });
+
   it("removes a cancelled item before submission", () => {
     const draft = interpret([
       customer("Een koffie."),

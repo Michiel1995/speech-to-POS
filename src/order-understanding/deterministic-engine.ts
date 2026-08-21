@@ -297,7 +297,7 @@ function hasOrderingContext(
     return true;
   }
 
-  const quantityCue = /(?:\d+|een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|one|two|three|four|five|un|une|deux|trois|quatre|cinq)\s*$/;
+  const quantityCue = /(?:\d+|een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|a|an|one|two|three|four|five|un|une|deux|trois|quatre|cinq)\s*$/;
   if (productMentions.some((mention) => quantityCue.test(normalized.slice(Math.max(0, mention.start - 18), mention.start)))) {
     return true;
   }
@@ -311,7 +311,7 @@ function hasOrderingContext(
     residue = `${residue.slice(0, mention.start)} ${residue.slice(mention.end)}`;
   }
   residue = normalizeSpoken(residue)
-    .replace(/\b(een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|one|two|three|four|five|un|une|deux|trois|quatre|cinq|en|of|and|et|graag|aub|alstublieft|please)\b/g, "")
+    .replace(/\b(een|eentje|twee|beide|allebei|drie|vier|vijf|zes|zeven|acht|negen|tien|a|an|one|two|three|four|five|un|une|deux|trois|quatre|cinq|en|of|and|et|graag|aub|alstublieft|please)\b/g, "")
     .replace(/\d+/g, "")
     .replace(/[.']/g, " ")
     .replace(/\s+/g, " ")
@@ -346,6 +346,97 @@ function unresolvedPhrase(text: string): string {
     .replace(/^\s*(een|one|un|une|1)\s+/, "")
     .trim()
     .slice(0, 120);
+}
+
+interface ReplacementInstruction {
+  target: string;
+  replacement: string;
+}
+
+function cleanReplacementPhrase(value: string): string {
+  return normalizeSpoken(value)
+    .replace(/^(?:wil ik|wou ik|neem ik|pak ik|bestel ik|doe mij|geef mij|i want|i will have|i'll have|je prends|je veux|donnez moi)\s+/, "")
+    .replace(/\s+(?:bestellen|nemen|pakken|graag|alsjeblieft|alstublieft|please|svp)$/, "")
+    .trim();
+}
+
+function parseReplacementInstruction(value: string): ReplacementInstruction | undefined {
+  const text = normalizeSpoken(value).replace(/[,.?!;:]+/g, " ").replace(/\s+/g, " ").trim();
+  const connectorPatterns = [
+    /^(?:vervang|verander)\s+(.+?)\s+(?:door|naar|voor)\s+(.+)$/,
+    /^(?:wissel|ruil)\s+(.+?)\s+(?:voor|met)\s+(.+)$/,
+    /^replace\s+(.+?)\s+with\s+(.+)$/,
+    /^swap\s+(.+?)\s+(?:for|with)\s+(.+)$/,
+    /^remplace(?:z)?\s+(.+?)\s+par\s+(.+)$/,
+    /^(?:echange|change)\s+(.+?)\s+(?:contre|pour)\s+(.+)$/,
+    /^maak\s+van\s+(.+?)\s+(.+)$/,
+  ];
+  for (const pattern of connectorPatterns) {
+    const match = text.match(pattern);
+    if (match) return { target: match[1].trim(), replacement: cleanReplacementPhrase(match[2]) };
+  }
+
+  const targetFirstWithVerb = text.match(
+    /^(?:in plaats van|in de plaats van|instead of|a la place de)\s+(.+?)\s+(?:wil ik|wou ik|neem ik|pak ik|bestel ik|doe mij|geef mij|i want|i will have|i'll have|je prends|je veux|donnez moi)\s+(.+)$/,
+  );
+  if (targetFirstWithVerb) {
+    return { target: targetFirstWithVerb[1].trim(), replacement: cleanReplacementPhrase(targetFirstWithVerb[2]) };
+  }
+
+  const courseFirst = text.match(
+    /^(?:in plaats van|in de plaats van|instead of|a la place de)\s+((?:(?:het|de|een|the|le|la|l)\s+)?(?:voorgerecht(?:en)?|starter(?:s)?|entree(?:s)?|hoofdgerecht(?:en)?|main course|plat principal|dessert(?:s)?|nagerecht(?:en)?|drank(?:en)?))\s+(.+)$/,
+  );
+  if (courseFirst) {
+    return { target: courseFirst[1].trim(), replacement: cleanReplacementPhrase(courseFirst[2]) };
+  }
+
+  const removeAndAdd = text.match(
+    /^(?:doe|haal|laat)\s+(.+?)\s+(?:weg|vallen|zitten)\s+(?:en|maar)\s+(?:doe|geef|neem|breng|bestel)\s+(?:me|mij|ons)?\s*(.+)$/,
+  );
+  if (removeAndAdd) {
+    return { target: removeAndAdd[1].trim(), replacement: cleanReplacementPhrase(removeAndAdd[2]) };
+  }
+
+  const deicticChange = text.match(/^maak\s+(?:van\s+)?(?:die|dat|daar|deze)\s+(.+?)\s+van$/);
+  if (deicticChange) return { target: "daar", replacement: cleanReplacementPhrase(deicticChange[1]) };
+
+  const noLongerWanted = text.match(
+    /^(.+?)\s+hoef(?:t|ven)\s+(?:toch\s+)?niet(?:\s+meer)?\s+(?:en|maar)?\s*(?:doe|geef|neem|breng|bestel)\s+(?:me|mij|ons)?\s*(.+)$/,
+  );
+  if (noLongerWanted) {
+    return { target: noLongerWanted[1].trim(), replacement: cleanReplacementPhrase(noLongerWanted[2]) };
+  }
+
+  const contrastReplacement = text.match(/^(?:geen|niet langer)\s+(.+?)(?:\s+meer)?\s+(?:maar\s+)?wel\s+(.+)$/);
+  if (contrastReplacement) {
+    return { target: contrastReplacement[1].trim(), replacement: cleanReplacementPhrase(contrastReplacement[2]) };
+  }
+
+  const englishSkip = text.match(/^skip\s+(.+?)\s+(?:i(?:'ll| will) take|give me|bring me)\s+(.+?)(?:\s+instead)?$/);
+  if (englishSkip) return { target: englishSkip[1].trim(), replacement: cleanReplacementPhrase(englishSkip[2]) };
+
+  const frenchContrast = text.match(/^(?:pas|plus)\s+(.+?)\s+(?:je prends|donnez moi)\s+(.+?)(?:\s+plutot)?$/);
+  if (frenchContrast) return { target: frenchContrast[1].trim(), replacement: cleanReplacementPhrase(frenchContrast[2]) };
+
+  const preferOver = text.match(/^(?:ik\s+)?(?:wil\s+)?toch\s+liever\s+(.+?)\s+dan\s+(.+)$/);
+  if (preferOver) return { target: preferOver[2].trim(), replacement: cleanReplacementPhrase(preferOver[1]) };
+
+  const replacementFirst = text.match(
+    /^(?:doe|neem|geef|zet|pak|bestel)?(?:\s+toch)?(?:\s+maar)?\s*(.+?)\s+(?:in plaats van|in de plaats van|instead of|a la place de)\s+(.+)$/,
+  );
+  if (replacementFirst) {
+    return { target: replacementFirst[2].trim(), replacement: cleanReplacementPhrase(replacementFirst[1]) };
+  }
+  return undefined;
+}
+
+function referencedCourse(value: string): DraftLine["course"] | undefined {
+  const text = normalizeSpoken(value);
+  if (/\b(?:voorgerecht(?:en)?|starter(?:s)?|entree(?:s)?)\b/.test(text)) return "starter";
+  if (/\b(?:hoofdgerecht(?:en)?|main course|plat principal)\b/.test(text)) return "main";
+  if (/\b(?:dessert(?:s)?|nagerecht(?:en)?)\b/.test(text)) return "dessert";
+  if (/\b(?:drank(?:en)?|drink(?:s)?)\b/.test(text)) return "drinks";
+  return undefined;
 }
 
 function shouldTreatAsModifierOnly(
@@ -416,8 +507,55 @@ export function interpretDeterministically(
     return true;
   };
 
-  const removeMatchingProduct = (phrase: string) => {
+  const removeMatchingProduct = (phrase: string) =>
     removeCandidateProducts(productCandidatesForPhrase(phrase, menu), phrase);
+
+  const removeMatchingCourse = (phrase: string): boolean | undefined => {
+    const course = referencedCourse(phrase);
+    if (!course) return undefined;
+    const matchingLines = lines.filter((line) => line.course === course);
+    if (matchingLines.length === 1) {
+      lines.splice(lines.findIndex((line) => line.lineId === matchingLines[0].lineId), 1);
+      return true;
+    }
+    const matchingProducts = matchingLines
+      .map((line) => menu.products.find((product) => product.id === line.productId))
+      .filter((product): product is MenuProduct => Boolean(product));
+    issues.push({
+      id: nextId("issue"),
+      type: matchingProducts.length > 1 ? "ambiguous_removal" : "unresolved_product",
+      blocking: true,
+      message: matchingProducts.length > 1
+        ? `Welk ${phrase} wil je vervangen?`
+        : `Er staat momenteel geen ${phrase} in deze bestelling.`,
+      rawText: phrase,
+      productCandidates: matchingProducts.slice(0, 5).map(issueCandidate),
+    });
+    return false;
+  };
+
+  const removeMatchingReference = (phrase: string): boolean | undefined => {
+    if (!/^(?:(?:de|het|the|le|la)\s+)?(?:die|dat|daar|deze|this|that|it|celle|celui|ca)$/.test(normalizeSpoken(phrase))) {
+      return undefined;
+    }
+    if (lines.length === 1) {
+      lines.splice(0, 1);
+      return true;
+    }
+    const matchingProducts = lines
+      .map((line) => menu.products.find((product) => product.id === line.productId))
+      .filter((product): product is MenuProduct => Boolean(product));
+    issues.push({
+      id: nextId("issue"),
+      type: matchingProducts.length > 1 ? "ambiguous_removal" : "unresolved_product",
+      blocking: true,
+      message: matchingProducts.length > 1
+        ? "Welk besteld product wil je vervangen?"
+        : "Er is geen besteld product waar deze verwijzing naar kan wijzen.",
+      rawText: phrase,
+      productCandidates: matchingProducts.slice(0, 5).map(issueCandidate),
+    });
+    return false;
   };
 
   const addOrUpdateLine = (
@@ -475,7 +613,11 @@ export function interpretDeterministically(
       isContextualOrderReference(text) ||
       (recentOfferedProducts.length === 1 && isSafeSoleContextSelection(text))
     );
-    const segments = contextualWithoutProduct ? [spokenText] : conversationSegments(spokenText);
+    // Keep a complete replacement utterance together. Splitting on a pause or
+    // comma could otherwise turn "the starter is no longer needed, give me a
+    // burger" into an ignored cancellation plus a separate addition.
+    const replacementInstruction = parseReplacementInstruction(text);
+    const segments = contextualWithoutProduct || replacementInstruction ? [spokenText] : conversationSegments(spokenText);
     if (segments.length > 1) {
       for (const segment of segments) processCustomerText(segment);
       return;
@@ -522,16 +664,38 @@ export function interpretDeterministically(
       return;
     }
 
-    const replaceMatch = normalized.match(/(?:verander|change) (?:die|de|the)?\s*(.+?) (?:naar|in|to) (.+)$/);
-    if (replaceMatch) {
-      removeMatchingProduct(replaceMatch[1]);
-      processCustomerText(replaceMatch[2]);
-      return;
-    }
-    const inPlaceMatch = normalized.match(/(?:doe|neem|geef|zet)?(?:\s+toch)?(?:\s+maar)?\s*(.+?)\s+in plaats van\s+(.+)$/);
-    if (inPlaceMatch) {
-      removeMatchingProduct(inPlaceMatch[2]);
-      processCustomerText(inPlaceMatch[1]);
+    const replacement = replacementInstruction ?? parseReplacementInstruction(normalized);
+    if (replacement) {
+      const originalLines = lines.map((line) => ({
+        ...line,
+        modifiers: line.modifiers.map((modifier) => ({ ...modifier })),
+        notes: [...line.notes],
+      }));
+      const removedByCourse = removeMatchingCourse(replacement.target);
+      const removedByReference = removedByCourse === undefined ? removeMatchingReference(replacement.target) : undefined;
+      const removed = removedByCourse ?? removedByReference ?? removeMatchingProduct(replacement.target);
+      if (removed && replacement.replacement) {
+        const stateAfterRemoval = JSON.stringify(lines);
+        const issuesBeforeReplacement = issues.length;
+        processCustomerText(replacement.replacement);
+        if (JSON.stringify(lines) === stateAfterRemoval) {
+          // A replacement is atomic: an unknown or ambiguous new product may
+          // raise a review issue, but may never silently delete the old line.
+          lines.splice(0, lines.length, ...originalLines);
+          if (issues.length === issuesBeforeReplacement) {
+            const culinaryAdvice = culinaryAdviceForText(`ik wil ${replacement.replacement}`, menu);
+            issues.push({
+              id: nextId("issue"),
+              type: "unresolved_product",
+              blocking: true,
+              message: culinaryAdvice?.message
+                ?? `Geen actief POS-product komt overeen met “${replacement.replacement}”. De bestaande bestelling bleef behouden.`,
+              rawText: culinaryAdvice?.requested.names.nl ?? replacement.replacement,
+              productCandidates: culinaryAdvice?.alternatives.map(issueCandidate),
+            });
+          }
+        }
+      }
       return;
     }
 

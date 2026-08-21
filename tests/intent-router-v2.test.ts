@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { demoMenu } from "@/src/data/demo-menu";
 import { normalizeFlemish } from "@/src/language/flemish-dialect";
 import { routeIntent, routeUtterance, type ConversationIntent } from "@/src/order-understanding/intent-router";
+import { planOrderAction } from "@/src/order-understanding/order-actions";
 
 interface IntentCase {
   text: string;
@@ -43,5 +44,19 @@ describe("Service Ears 2.0 intent router corpus", () => {
   it("normalizes required Flemish contractions without changing product names", () => {
     expect(normalizeFlemish("Awel, wa hedde? Khem goesting in ne Duvel.", "auto")).toContain("wat heb je");
     expect(normalizeFlemish("Awel, wa hedde? Khem goesting in ne Duvel.", "auto")).toContain("duvel");
+  });
+
+  it("summarizes a course replacement with the new product, never Plaice", () => {
+    const route = routeIntent("In plaats van het voorgerecht een hamburger bestellen.", {
+      menu: demoMenu,
+      hasOrder: true,
+      existingProductIds: ["POS-2001"],
+    });
+    const action = planOrderAction(route, demoMenu);
+
+    expect(route.intent).toBe("replacement");
+    expect(route.productIds).toContain("POS-3006");
+    expect(route.productIds).not.toContain("POS-3005");
+    expect(action.summary).toBe("Vervangen: Hamburger");
   });
 });

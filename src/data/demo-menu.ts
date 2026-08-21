@@ -56,7 +56,7 @@ const coffee: ModifierGroup = {
 const menu: TenantMenu = {
   tenantId: "tenant-demo-brussels",
   restaurantName: "Brasserie De Spraakwaterval",
-  version: "mock-2026-08-10.1",
+  version: "mock-2026-08-21.2",
   currency: "EUR",
   modifierGroups: [cuisson, side, sauce, coffee],
   tables: Array.from({ length: 20 }, (_, index) => ({
@@ -83,6 +83,7 @@ const menu: TenantMenu = {
     { id: "POS-3003", sku: "FISH-DAY", posName: "VIS VD DAG", canonicalName: "Fish of the day", category: "Mains", defaultCourse: "main", priceCents: 2690, active: true, variant: "Salmon", seasonLabel: "deze week: zalm", aliases: ["vis van de dag", "fish of the day", "poisson du jour", "zalm", "salmon", "saumon"], modifierGroupIds: ["MG-SIDE"], allergenCodes: ["fish"] },
     { id: "POS-3005", sku: "PLAICE", posName: "PLADIJS", canonicalName: "Plaice", category: "Mains", defaultCourse: "main", priceCents: 2780, active: true, aliases: ["pladijs", "plaice", "plie", "schol"], modifierGroupIds: ["MG-SIDE"], allergenCodes: ["fish"] },
     { id: "POS-3004", sku: "VEG-STEW", posName: "VEG STOOF", canonicalName: "Vegetarian stew", category: "Mains", defaultCourse: "main", priceCents: 2190, active: true, aliases: ["vegetarische stoofpot", "vegetarian stew", "stoofpot zonder vlees"], modifierGroupIds: ["MG-SIDE"], allergenCodes: ["celery"] },
+    { id: "POS-3006", sku: "BURGER", posName: "HAMBURGER", canonicalName: "Hamburger", category: "Mains", defaultCourse: "main", priceCents: 2190, active: true, aliases: ["hamburger", "burger", "ham burger", "hamburgertje", "beef burger"], modifierGroupIds: [], allergenCodes: ["gluten", "eggs"] },
     { id: "POS-3101", sku: "FRIES", posName: "FRIES PORT", canonicalName: "Portion of fries", category: "Sides", defaultCourse: "main", priceCents: 450, active: true, aliases: ["portie frieten", "frieten", "fries", "frites"], modifierGroupIds: [], allergenCodes: [] },
     { id: "POS-4001", sku: "COFFEE", posName: "KOFFIE", canonicalName: "Coffee", category: "Hot drinks", defaultCourse: "dessert", priceCents: 310, active: true, aliases: ["koffie", "koffi", "coffee", "café"], modifierGroupIds: ["MG-COFFEE"], allergenCodes: [] },
     { id: "POS-5001", sku: "CHOC-MOUS", posName: "CHOC MOUS", canonicalName: "Chocolate mousse", category: "Desserts", defaultCourse: "dessert", priceCents: 890, active: true, aliases: ["chocolademousse", "chocolade moes", "chocolate mousse", "mousse au chocolat"], modifierGroupIds: [], allergenCodes: ["milk", "eggs"] },

@@ -133,6 +133,12 @@ function collectFuzzyProductMatches(
       const containsExact = overlapping.filter((span) => windowStart <= span.start && windowEnd >= span.end);
       if (overlapping.length > 0 && containsExact.length === 0) continue;
       const candidate = window.map((token) => token.value).join(" ");
+      // Never reinterpret replacement grammar as a fish name. In Dutch and
+      // French, "in plaats van" / "à la place de" otherwise resembles the
+      // English menu item Plaice closely enough for a fuzzy false positive.
+      // An exact spoken "plaice" or "pladijs" remains available through the
+      // exact-alias pass above.
+      if (/\b(?:plaats|place)\b/.test(candidate)) continue;
       if (/^(?:geen|zonder|niet|haal|laat|annuleer|schrap|nog|ook|extra|doe|geef|neem|bestel|voeg|zet|breng|voor|graag)\b|\b(?:en|of|maar|weg|zitten|vallen|graag|erbij)$/.test(candidate)) continue;
       if (/^(?:(?:ja|yes|oui|ok|okay|please|graag|volontiers|celle|celui|ca|that|this|one|die|dat|deze|maar)\s*)+$/.test(candidate)) continue;
       const rankings = rankProductCandidatesForPhrase(candidate, menu, options);
