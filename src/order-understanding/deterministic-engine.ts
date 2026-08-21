@@ -664,7 +664,8 @@ export function interpretDeterministically(
       );
       if (filteredCandidates.length === 0) continue;
 
-      if (filteredCandidates.length > 1) {
+      const ambiguousAudioMatch = filteredCandidates.length > 1 && request.source === "audio";
+      if (filteredCandidates.length > 1 && !ambiguousAudioMatch) {
         processedProductCount += 1;
         issues.push({
           id: nextId("issue"),
@@ -693,20 +694,24 @@ export function interpretDeterministically(
       const notes = /apart|on the side|a part/.test(normalized) ? ["Serve specified sauce/side separately"] : [];
       const confidence = mention.confidence >= 1 ? 0.96 : Math.min(0.9, mention.confidence);
       latestLine = addOrUpdateLine(product, quantity, uniqueModifiers, correction, notes, confidence);
-      if (mention.requiresConfirmation) {
+      if (mention.requiresConfirmation || ambiguousAudioMatch) {
         if (request.source === "audio") {
           issues.push({
             id: nextId("issue"),
             type: "speech_confirmation",
             blocking: true,
-            message: `Bedoelde je ${product.canonicalName} toen je “${mention.alias}” zei?`,
+            message: ambiguousAudioMatch
+              ? `Ik heb voorlopig ${product.canonicalName} toegevoegd voor “${mention.alias}”. Klopt dat?`
+              : `Bedoelde je ${product.canonicalName} toen je “${mention.alias}” zei?`,
             rawText: mention.alias,
             lineId: latestLine.lineId,
             quantityDelta: quantity,
             matchConfidence: mention.candidateScores[0]?.acousticScore ?? mention.confidence,
             matchMargin: mention.margin,
             matchEvidence: mention.candidateScores[0]?.evidence,
-            productCandidates: [issueCandidate(product)],
+            productCandidates: ambiguousAudioMatch
+              ? filteredCandidates.slice(0, 5).map(issueCandidate)
+              : [issueCandidate(product)],
           });
         } else {
           warnings.push({

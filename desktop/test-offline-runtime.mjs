@@ -75,6 +75,14 @@ try {
   if (!health) throw new Error(`Standalone server did not start.\n${serverOutput}`);
   const healthReadyMs = Math.round(performance.now() - testStartedAt);
 
+  const interpretWarmupStartedAt = performance.now();
+  const interpretWarmupResponse = await fetch(`${origin}/api/interpret`, { cache: "no-store" });
+  const interpretWarmup = await interpretWarmupResponse.json();
+  const interpretWarmupMs = Math.round(performance.now() - interpretWarmupStartedAt);
+  if (!interpretWarmupResponse.ok || !interpretWarmup.warmed) {
+    throw new Error(`Interpretation warmup failed: ${JSON.stringify(interpretWarmup)}\n${serverOutput}`);
+  }
+
   let explicitWarmupMs;
   let warmupResult;
   if (process.env.TEST_WARMUP === "1") {
@@ -125,6 +133,7 @@ try {
   const summary = {
     health: health.ok,
     serverStartupMs: healthReadyMs,
+    interpretWarmupMs,
     explicitWarmupMs,
     warmedModel: warmupResult?.model?.label,
     coldTranscriptionMs,

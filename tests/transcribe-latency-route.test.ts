@@ -8,7 +8,7 @@ vi.mock("@/src/speech/offline-transcriber", () => ({
   transcribeHospitalityAudioOffline: offlineTranscriber,
 }));
 
-import { POST as interpretPost } from "@/app/api/interpret/route";
+import { GET as interpretWarmup, POST as interpretPost } from "@/app/api/interpret/route";
 import { POST as transcribePost } from "@/app/api/transcribe/route";
 
 function audioRequest(text: string, confidence: number, final: boolean, contextProductIds: string[] = []): Request {
@@ -47,6 +47,12 @@ describe("hard voice latency and factuality route", () => {
   beforeEach(() => {
     offlineTranscriber.mockReset();
     offlineTranscriber.mockResolvedValue(localResult("Doe mij twee Duvel"));
+  });
+
+  it("warms the menu interpretation path before the first spoken order", async () => {
+    const response = await interpretWarmup();
+    expect(response.ok).toBe(true);
+    await expect(response.json()).resolves.toMatchObject({ warmed: true });
   });
 
   it("builds a strongly menu-grounded final concept inside two seconds without starting Whisper", async () => {

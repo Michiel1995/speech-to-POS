@@ -15,12 +15,14 @@ describe("local speech warmup policy", () => {
     expect(localSpeechWarmupRequired(false, "browser")).toBe(false);
   });
 
-  it("blocks an offline recording until the local model is ready", () => {
-    expect(localSpeechRecordingReady("offline", "idle")).toBe(false);
-    expect(localSpeechRecordingReady("offline", "warming")).toBe(false);
-    expect(localSpeechRecordingReady("offline", "error")).toBe(false);
+  it("keeps recording available while local warmup runs in the background", () => {
+    expect(localSpeechRecordingReady("offline", "idle")).toBe(true);
+    expect(localSpeechRecordingReady("offline", "warming")).toBe(true);
+    expect(localSpeechRecordingReady("offline", "error")).toBe(true);
     expect(localSpeechRecordingReady("offline", "ready")).toBe(true);
     expect(localSpeechRecordingReady("browser", "idle")).toBe(true);
+    expect(localSpeechRecordingReady("detecting", "idle")).toBe(false);
+    expect(localSpeechRecordingReady("unavailable", "idle")).toBe(false);
   });
 
   it("refreshes well before the server idle-unload boundary", () => {

@@ -12,6 +12,21 @@ import { getPOSAdapter } from "@/src/pos/registry";
 import { findProductMentions, normalizeSpoken } from "@/src/semantic-menu/matcher";
 import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
 
+export const dynamic = "force-dynamic";
+
+export async function GET() {
+  try {
+    const menu = await getPOSAdapter().getMenu();
+    const probe = "ik neem een duvel en een steak met frieten";
+    findProductMentions(probe, menu);
+    routeUtterance(probe, { menu, dialectProfile: "auto" });
+    culinaryAdviceForText("hebben jullie kabeljauw", menu);
+    return NextResponse.json({ warmed: true });
+  } catch (error) {
+    return apiError(error);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const input = InterpretRequestSchema.parse(await request.json());

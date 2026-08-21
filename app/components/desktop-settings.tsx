@@ -128,14 +128,9 @@ export function DesktopSettings() {
 
   return (
     <>
-      <button className="settings-button" onClick={() => setOpen(true)}>
-        {available
-          ? hasAdaptiveCascade
-            ? "Snel · sterk bij twijfel"
-            : selected
-            ? `Adaptief · ${selected.label.replace("Whisper ", "")}`
-            : "Gratis spraak actief"
-          : "Spraakmodule ontbreekt"}
+      <button className="settings-button" onClick={() => setOpen(true)} aria-label="Instellingen openen" title="Instellingen">
+        <span aria-hidden="true">⚙</span>
+        <span>Instellingen</span>
       </button>
       {open && (
         <div className="settings-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setOpen(false)}>

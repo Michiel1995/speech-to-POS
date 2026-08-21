@@ -78,6 +78,21 @@ describe("speech robustness", () => {
     expect(validateDraft(rejected, demoMenu)).toMatchObject({ valid: false });
   });
 
+  it("adds the best active POS candidate for an ambiguous spoken order", () => {
+    const draft = audioOrder("Een Leffe graag.");
+    expect(draft.lines).toMatchObject([{ productId: "POS-1003", quantity: 1 }]);
+    expect(draft.issues).toMatchObject([{
+      type: "speech_confirmation",
+      blocking: true,
+      lineId: draft.lines[0].lineId,
+      productCandidates: [
+        { productId: "POS-1003" },
+        { productId: "POS-1004" },
+        { productId: "POS-1005" },
+      ],
+    }]);
+  });
+
   it("rejects only the uncertain quantity when the product was already ordered", () => {
     const initial = audioOrder("Een Coca-Cola Zero.");
     const addition = audioOrder("Nog een coka cola zero.", initial.lines);

@@ -19,7 +19,6 @@ import {
 import {
   appendTableEvents,
   pushDraftHistory,
-  redoDraft,
   stableUtteranceId,
   undoDraft,
   type DraftHistory,
@@ -41,7 +40,6 @@ import type {
   TenantMenu,
 } from "@/src/domain/schemas";
 import {
-  addManualProduct,
   confirmSpeechProduct,
   rejectSpeechProduct,
   resolveIssueWithoutData,
@@ -50,7 +48,6 @@ import {
   resolveWithProduct,
 } from "@/src/ui/draft-actions";
 import { completedBrowserSpeechText, rankSpeechHypotheses } from "@/src/speech/recognition-ranker";
-import { evaluateVoiceLatencyGate, FINAL_REVIEW_BUDGET_MS, PROVISIONAL_REVIEW_BUDGET_MS } from "@/src/speech/latency-budget";
 import {
   LOCAL_SPEECH_KEEPALIVE_MS,
   LOCAL_SPEECH_WARMUP_TIMEOUT_MS,
@@ -61,11 +58,10 @@ import {
 } from "@/src/speech/warmup-policy";
 import { findProductMentions } from "@/src/semantic-menu/matcher";
 import { culinaryAdviceForText } from "@/src/knowledge/culinary-knowledge";
-import { formatTurns, parseTranscript, shouldClearTranscriptAfterSuccess } from "@/src/ui/transcript";
+import { formatTurns, shouldClearTranscriptAfterSuccess } from "@/src/ui/transcript";
 import {
   appendVoicePerformanceSample,
   parseVoicePerformanceSamples,
-  summarizeVoicePerformance,
   VoicePerformanceTrace,
   type VoicePerformanceSample,
 } from "@/src/analytics/voice-performance";
@@ -79,24 +75,6 @@ import {
   type VoicePhase,
 } from "@/src/ui/voice-operation";
 import { DesktopSettings } from "./desktop-settings";
-import { LanguageManager } from "./language-manager";
-import { BackupManager } from "./backup-manager";
-
-const DEMOS = {
-  core: `Customer: Voor mij de steak saignant met frieten en pepersaus.
-Waiter: Dus steak saignant, frieten en pepersaus?
-Customer: Ja.
-Customer: Voor mij de vol-au-vent met kroketten en twee Duvel.
-Customer: Nee wacht, één Duvel en doe er een Stella bij.`,
-  ambiguity: "Customer: Een Leffe.",
-  unknown: "Customer: Voor mij een truffelpasta.",
-  question: `Customer: Hebben jullie alcoholvrij bier?
-Waiter: We hebben Leffe 0.0.
-Customer: Dan neem ik de alcoholvrije Leffe.`,
-  course: "Customer: Ik neem de garnaalkroketten maar breng die samen met mijn steak.",
-  mixed: "Customer: Voor mij de steak medium rare with fries en béarnaise.",
-  fuzzySpeech: "Customer: Doe er een coka cola zero bij.",
-};
 
 const COURSE_LABELS: Record<Course, string> = {
   drinks: "Dranken",
@@ -104,23 +82,6 @@ const COURSE_LABELS: Record<Course, string> = {
   main: "Hoofdgerechten",
   dessert: "Nagerechten",
   unspecified: "Niet ingedeeld",
-};
-
-const INTENT_LABELS: Record<PlannedOrderAction["intent"], string> = {
-  order: "bestelling",
-  addition: "bijbestelling",
-  removal: "verwijderen",
-  replacement: "vervangen",
-  correction: "correctie",
-  menu_question: "menuvraag",
-  availability_question: "beschikbaarheid",
-  price_question: "prijsvraag",
-  ingredient_question: "ingrediënten",
-  recommendation_question: "adviesvraag",
-  answer: "antwoord",
-  refusal: "weigering",
-  non_order: "gesprek",
-  unclear: "onduidelijk",
 };
 
 interface MenuResponse {
@@ -146,7 +107,7 @@ const DRAFTS_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.drafts;
 const CONTEXT_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.context;
 const EVENTS_BY_TABLE_KEY = LOCAL_STORAGE_KEYS.events;
 const LANGUAGE_LEARNING_KEY = LOCAL_STORAGE_KEYS.languageLearning;
-const LIVE_PREVIEW_KEY = "service-ears:live-edge-preview:v1";
+const LIVE_PREVIEW_KEY = "service-ears:live-edge-preview:v2";
 const VOICE_PERFORMANCE_KEY = "service-ears:voice-performance:v1";
 
 function draftForTable(tableId: string): DraftOrder | undefined {
@@ -244,7 +205,7 @@ function UnresolvedChoice({
           if (product) onChange(resolveWithProduct(draft, issue.id, product, menu));
         }}
       >
-        Use product
+        Toevoegen
       </button>
     </div>
   );
@@ -254,14 +215,12 @@ export function VoiceOrderConsole() {
   const [menuResponse, setMenuResponse] = useState<MenuResponse>();
   const [tableId, setTableId] = useState("TABLE-12");
   const [transcript, setTranscript] = useState("");
-  const [selectedDemo, setSelectedDemo] = useState("");
-  const [speechLanguage, setSpeechLanguage] = useState<"nl" | "fr" | "en" | "auto">("nl");
-  const [dialectProfile, setDialectProfile] = useState<DialectProfile>("auto");
+  const [, setSelectedDemo] = useState("");
+  const [speechLanguage] = useState<"nl" | "fr" | "en" | "auto">("auto");
+  const [dialectProfile] = useState<DialectProfile>("auto");
   const [draft, setDraft] = useState<DraftOrder>();
   const [assistantMessage, setAssistantMessage] = useState<string>();
   const [contextProductIds, setContextProductIds] = useState<string[]>([]);
-  const [correction, setCorrection] = useState("");
-  const [manualProductId, setManualProductId] = useState("");
   const [busy, setBusy] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [recording, setRecording] = useState<"conversation" | "correction">();
@@ -272,19 +231,18 @@ export function VoiceOrderConsole() {
   const [error, setError] = useState<string>();
   const [audioLevel, setAudioLevel] = useState(0);
   const [tableEvents, setTableEvents] = useState<TableMemoryEvent[]>([]);
-  const [latestActions, setLatestActions] = useState<PlannedOrderAction[]>([]);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  const [, setLatestActions] = useState<PlannedOrderAction[]>([]);
   const [learningState, setLearningState] = useState<LanguageLearningState>(EMPTY_LANGUAGE_LEARNING);
   const [draftHistory, setDraftHistory] = useState<DraftHistory>({ past: [], future: [] });
   const [reviewActivity, setReviewActivity] = useState<ReviewActivity>();
   const [microphoneStatus, setMicrophoneStatus] = useState("Nog niet gekalibreerd");
-  const [livePreviewEnabled, setLivePreviewEnabled] = useState(false);
-  const [autoProcessOnSilence, setAutoProcessOnSilence] = useState(true);
+  const [livePreviewEnabled, setLivePreviewEnabled] = useState(true);
+  const autoProcessOnSilence = true;
   const [livePreviewGuidance, setLivePreviewGuidance] = useState<string>();
   const [provisionalProducts, setProvisionalProducts] = useState<Array<{ id: string; name: string }>>([]);
   const [provisionalDraft, setProvisionalDraft] = useState<DraftOrder>();
-  const [voicePhase, setVoicePhase] = useState<VoicePhase>("IDLE");
-  const [performanceSamples, setPerformanceSamples] = useState<VoicePerformanceSample[]>([]);
+  const [, setVoicePhase] = useState<VoicePhase>("IDLE");
+  const [, setPerformanceSamples] = useState<VoicePerformanceSample[]>([]);
   const recordingStream = useRef<MediaStream | undefined>(undefined);
   const audioContext = useRef<AudioContext | undefined>(undefined);
   const audioSource = useRef<MediaStreamAudioSourceNode | undefined>(undefined);
@@ -314,6 +272,7 @@ export function VoiceOrderConsole() {
   const silenceTimer = useRef<number | undefined>(undefined);
   const speechWarmupTimer = useRef<number | undefined>(undefined);
   const speechWarmupInFlight = useRef(false);
+  const automaticServiceStartAttempted = useRef(false);
   const recordingStartedAt = useRef(0);
   const stoppingRecording = useRef(false);
   const operationCoordinator = useRef(new VoiceOperationCoordinator());
@@ -328,11 +287,6 @@ export function VoiceOrderConsole() {
     ...contextProductIds,
     ...(draft?.lines.map((line) => line.productId).reverse() ?? []),
   ])].slice(0, 12), [contextProductIds, draft]);
-  const performanceSummary = useMemo(() => summarizeVoicePerformance(performanceSamples), [performanceSamples]);
-  const latencyGate = useMemo(() => evaluateVoiceLatencyGate({
-    provisionalP95Ms: performanceSummary.provisionalStopToReviewP95Ms,
-    finalP95Ms: performanceSummary.stopToReviewP95Ms,
-  }), [performanceSummary]);
 
   const beginOperation = useCallback((kind: VoiceOperationKind): VoiceOperationToken => {
     const token = operationCoordinator.current.begin({
@@ -473,7 +427,7 @@ export function VoiceOrderConsole() {
       setContextProductIds(contextForTable(restoredTableId));
       setTableEvents(eventsForTable(restoredTableId));
       setLearningState(parseLanguageLearning(localStorage.getItem(LANGUAGE_LEARNING_KEY)));
-      setLivePreviewEnabled(localStorage.getItem(LIVE_PREVIEW_KEY) === "enabled");
+      setLivePreviewEnabled(localStorage.getItem(LIVE_PREVIEW_KEY) !== "disabled");
       setPerformanceSamples(parseVoicePerformanceSamples(localStorage.getItem(VOICE_PERFORMANCE_KEY)));
       const restoredDraft = draftForTable(restoredTableId);
       draftRef.current = restoredDraft;
@@ -651,7 +605,7 @@ export function VoiceOrderConsole() {
       storeContextForTable(selectedTable.id, nextContextProductIds);
       const keepAudioTranscriptForReview = source === "audio" && result.draft.lines.length === 0 && !result.assistantMessage;
       if (shouldClearTranscriptAfterSuccess(source) && !keepAudioTranscriptForReview) {
-        setTranscript("");
+        if (source !== "audio") setTranscript("");
         setSelectedDemo("");
       }
       const mutatingActions = (result.actions ?? []).filter((action) => action.mutatesOrder);
@@ -697,7 +651,6 @@ export function VoiceOrderConsole() {
   const applyCorrection = useCallback(async (text: string, operation?: VoiceOperationToken) => {
     if (!draft || !text.trim()) return;
     await interpretTurns([{ speaker: "unknown", text: text.trim() }], "manual", draft.lines, operation);
-    setCorrection("");
   }, [draft, interpretTurns]);
 
   const uploadRecording = useCallback(async (
@@ -987,18 +940,11 @@ export function VoiceOrderConsole() {
     }
   };
 
-  const toggleShift = async () => {
+  const startService = useCallback(async () => {
     if (speechWarmupInFlight.current) return;
-    if (shiftMode) {
-      if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
-      speechWarmupTimer.current = undefined;
-      setShiftMode(false);
-      setSpeechWarmupState("idle");
-      setMicrophoneStatus("Shift gepauzeerd");
-      return;
-    }
     const needsLocalWarmup = localSpeechWarmupRequired(Boolean(window.serviceEarsDesktop), speechMode);
     speechWarmupInFlight.current = true;
+    setShiftMode(true);
     setSpeechWarmupState(needsLocalWarmup ? "warming" : "ready");
     const requestWarmup = async () => {
       try {
@@ -1014,6 +960,9 @@ export function VoiceOrderConsole() {
       }
     };
     const warmup = needsLocalWarmup ? requestWarmup() : Promise.resolve(true);
+    const interpretationWarmup = fetch("/api/interpret", { cache: "no-store" })
+      .then(async (response) => response.ok && (await response.json() as { warmed?: boolean }).warmed === true)
+      .catch(() => false);
     setMicrophoneStatus("Ruis meten… blijf één seconde stil");
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
@@ -1048,31 +997,34 @@ export function VoiceOrderConsole() {
     } catch {
       setMicrophoneStatus("Kalibratie overgeslagen · controleer microfoontoegang");
     }
-    const warmed = await warmup;
+    const [warmed, interpretationReady] = await Promise.all([warmup, interpretationWarmup]);
     speechWarmupInFlight.current = false;
     if (!warmed) {
-      setSpeechWarmupState("error");
-      setMicrophoneStatus("Spraakmotor niet gereed · start de dienst opnieuw");
-      setError("De lokale spraakmotor kon niet veilig worden voorverwarmd. Er is nog geen opname gestart; probeer Start dienst opnieuw.");
-      return;
+      setSpeechWarmupState("ready");
+      setMicrophoneStatus((current) => `${current} · lokale controle activeert bij verwerking`);
+    } else {
+      setSpeechWarmupState("ready");
+      setMicrophoneStatus((current) => needsLocalWarmup ? `${current} · bestelklaar` : current);
     }
-    setSpeechWarmupState("ready");
-    setMicrophoneStatus((current) => needsLocalWarmup ? `${current} · spraakmotor warm` : current);
-    setShiftMode(true);
+    if (!interpretationReady) {
+      setMicrophoneStatus((current) => `${current} · menucontrole activeert bij de eerste bestelling`);
+    }
     if (needsLocalWarmup) {
+      if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
       speechWarmupTimer.current = window.setInterval(() => {
         void requestWarmup().then((stillWarm) => {
           if (stillWarm) return;
-          if (speechWarmupTimer.current) window.clearInterval(speechWarmupTimer.current);
-          speechWarmupTimer.current = undefined;
-          setSpeechWarmupState("error");
-          setShiftMode(false);
-          setMicrophoneStatus("Spraakmotor afgekoeld · start de dienst opnieuw");
-          setError("De lokale spraakmotor verloor zijn gereedstatus. Opname is geblokkeerd zodat de eerste bestelling niet op een koude of onzekere route terechtkomt.");
+          setMicrophoneStatus("Bestelklaar · lokale controle activeert bij de volgende verwerking");
         });
       }, LOCAL_SPEECH_KEEPALIVE_MS);
     }
-  };
+  }, [speechMode]);
+
+  useEffect(() => {
+    if (!hydrated || speechMode === "detecting" || speechMode === "unavailable" || automaticServiceStartAttempted.current) return;
+    automaticServiceStartAttempted.current = true;
+    void startService();
+  }, [hydrated, speechMode, startService]);
 
   const startRecording = async (purpose: "conversation" | "correction") => {
     const operation = beginOperation(purpose);
@@ -1332,10 +1284,6 @@ export function VoiceOrderConsole() {
       .map((course) => ({ course, lines: draft.lines.filter((line) => line.course === course) }))
       .filter((group) => group.lines.length);
   }, [draft]);
-  const uniqueLatestActions = useMemo(() => [...new Map(
-    latestActions.map((action) => [`${action.intent}:${action.summary}`, action]),
-  ).values()], [latestActions]);
-
   const hasBlockers = !draft || draft.lines.length === 0 || draft.issues.some((issue) => issue.blocking);
 
   return (
@@ -1344,27 +1292,28 @@ export function VoiceOrderConsole() {
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">SE</span>
           <div className="brand-copy">
-            <p className="eyebrow">SERVICE INTELLIGENCE · VOICE TO POS</p>
+            <p className="eyebrow">SPRAAK NAAR KASSA</p>
             <h1>Service Ears</h1>
-            <p className="brand-subtitle">Quiet intelligence for effortless service</p>
+            <p className="brand-subtitle">Bestellen door gewoon te spreken</p>
           </div>
         </div>
         <div className="header-statuses">
           <DesktopSettings />
-          <LanguageManager menu={menu} state={learningState} onChange={setLearningState} />
-          <BackupManager />
           <span className={`network ${speechMode === "unavailable" ? "offline" : "online"}`}>
-            {speechMode === "offline" ? "100% lokaal" : speechMode === "browser" ? "Gratis browsertest" : speechMode === "unavailable" ? "Open in Microsoft Edge" : "Spraak controleren…"}
+            {speechMode === "unavailable"
+              ? "Spraak niet beschikbaar"
+              : speechMode === "detecting" || !shiftMode
+                ? "Automatisch voorbereiden…"
+                : speechWarmupState === "warming"
+                  ? "Bestelklaar · model warmt op"
+                  : "Bestelklaar"}
           </span>
-          <button className={`shift-toggle ${shiftMode ? "active" : ""}`} disabled={speechWarmupState === "warming"} onClick={() => void toggleShift()}>
-            {speechWarmupState === "warming" ? "Spraakmotor opwarmen…" : shiftMode ? "Dienst actief" : "Start dienst"}
-          </button>
         </div>
       </header>
 
       <section className="hero-card">
         <div className="table-picker">
-          <p className="hero-overline">Live service console</p>
+          <p className="hero-overline">Klaar om te bestellen</p>
           <label htmlFor="table">Actieve tafel</label>
           <select id="table" value={tableId} onChange={(event) => {
             const nextTableId = event.target.value;
@@ -1396,12 +1345,12 @@ export function VoiceOrderConsole() {
           <div className="record-command">
             <button
               className={`record-button ${recording === "conversation" ? "recording" : ""}`}
-              disabled={busy || !menu || !shiftMode || !localSpeechRecordingReady(speechMode, speechWarmupState) || recording === "correction" || speechMode === "unavailable" || speechMode === "detecting"}
+              disabled={busy || !menu || !localSpeechRecordingReady(speechMode, speechWarmupState) || recording === "correction"}
               onClick={() => recording === "conversation" ? void stopRecording() : void startRecording("conversation")}
               aria-label={recording === "conversation" ? "Opname stoppen" : "Gesprek opnemen"}
             >
               <span className="record-dot" />
-              {recording === "conversation" ? (speechMode === "offline" ? "Stop & definitief controleren" : "Stop & verwerken") : "Luister naar tafel"}
+              {recording === "conversation" ? "Stop & verwerk" : "Luister"}
             </button>
             <div className="meter-row">
               <span>Microfoon</span>
@@ -1410,7 +1359,6 @@ export function VoiceOrderConsole() {
           </div>
           <div className="record-copy">
             {speechMode === "offline" && (
-              <div className="recording-options">
               <label className="live-preview-toggle">
                 <input
                   type="checkbox"
@@ -1418,95 +1366,32 @@ export function VoiceOrderConsole() {
                   disabled={Boolean(recording)}
                   onChange={(event) => setLivePreviewEnabled(event.target.checked)}
                 />
-                Voorlopig concept binnen 2 seconden via Microsoft Edge
-                <small>Internet nodig · lokale Whisper blijft de definitieve controle</small>
+                Toon woorden tijdens het spreken
+                <small>Snelle voorvertoning; de lokale eindcontrole blijft actief</small>
               </label>
-              <label className="live-preview-toggle">
-                <input
-                  type="checkbox"
-                  checked={autoProcessOnSilence}
-                  disabled={Boolean(recording)}
-                  onChange={(event) => setAutoProcessOnSilence(event.target.checked)}
-                />
-                Automatisch afronden na een natuurlijke pauze
-                <small>Na 3–5 seconden echte stilte · handmatig stoppen verwerkt meteen</small>
-              </label>
-              </div>
             )}
-            <p>{shiftMode
-              ? speechMode === "offline"
-                ? livePreviewEnabled
-                  ? "Edge toont voorlopige tekst terwijl je praat; na stoppen controleert het lokale model de volledige opname."
-                  : "Alles draait lokaal. De volledige transcriptie start na stoppen."
-                : speechMode === "browser"
-                  ? "Gratis testspraak via Microsoft Edge. Internet is nodig en audio wordt door Microsoft verwerkt."
-                  : "Open de browsertest in Microsoft Edge om spraak te gebruiken."
-              : "Start de dienst om de microfoon te activeren."} <span className="microphone-status">{microphoneStatus}</span></p>
+            <p>{speechMode === "offline"
+              ? "Spreek natuurlijk. Bestellingen verschijnen automatisch; twijfel wordt zichtbaar gemarkeerd."
+              : speechMode === "browser"
+                ? "Spreek natuurlijk. De gratis browserherkenning verwerkt het gesprek direct."
+                : "Spraak wordt automatisch voorbereid."} <span className="microphone-status">{microphoneStatus}</span></p>
           </div>
         </div>
       </section>
 
-      <section className="workflow-strip" aria-label="Werkstroom">
-        <div className={recording ? "active" : "done"}><span>1</span><strong>Luisteren</strong><small>{recording ? "spraak wordt opgevangen" : "klaar voor gesprek"}</small></div>
-        <div className={busy ? "active" : draft ? "done" : ""}><span>2</span><strong>Begrijpen</strong><small>{latestActions[0]?.summary ?? "intentie en menucontext"}</small></div>
-        <div className={draft?.issues.length ? "attention" : draft ? "done" : ""}><span>3</span><strong>Controleren</strong><small>{draft?.issues.length ? `${draft.issues.length} punt${draft.issues.length === 1 ? "" : "en"} te bevestigen` : draft ? "bestelling is rustig opgebouwd" : "nog geen concept"}</small></div>
-      </section>
-      <p className="performance-summary" aria-label="Lokale prestatiemeting">
-        Fase: {voicePhase.replaceAll("_", " ").toLocaleLowerCase("nl-BE")}
-        {performanceSummary.samples > 0
-          ? ` · stop tot Review p50 ${((performanceSummary.stopToReviewP50Ms ?? performanceSummary.totalP50Ms) / 1_000).toFixed(1)} s · p95 ${((performanceSummary.stopToReviewP95Ms ?? performanceSummary.totalP95Ms) / 1_000).toFixed(1)} s · n=${performanceSummary.samples}`
-          : " · meting start bij de eerste verwerking"}
-      </p>
-      {latencyGate.measured && <p className={`performance-slo ${latencyGate.passed ? "is-green" : "is-red"}`}>
-        Harde snelheidspoort · voorlopig p95 {((performanceSummary.provisionalStopToReviewP95Ms ?? 0) / 1_000).toFixed(1)} s / {(PROVISIONAL_REVIEW_BUDGET_MS / 1_000).toFixed(1)} s · definitief p95 {((performanceSummary.stopToReviewP95Ms ?? 0) / 1_000).toFixed(1)} s / {(FINAL_REVIEW_BUDGET_MS / 1_000).toFixed(1)} s
-      </p>}
-
       <section className="workspace-grid">
         <div className="panel capture-panel">
           <div className="panel-heading">
-            <div><p className="step">01 · OPNAME</p><h2>Gesprek</h2><p className="panel-intro">Luister, lees mee en verfijn waar nodig.</p></div>
-            <div className="language-pickers">
-              <select value={speechLanguage} onChange={(event) => setSpeechLanguage(event.target.value as typeof speechLanguage)} aria-label="Gesproken taal">
-                <option value="nl">Nederlands</option><option value="fr">Français</option><option value="en">English</option><option value="auto">Automatisch · meertalig</option>
-              </select>
-              <select value={dialectProfile} onChange={(event) => setDialectProfile(event.target.value as DialectProfile)} aria-label="Dialectprofiel">
-                <option value="auto">Dialect automatisch</option><option value="standard">Algemeen Nederlands</option><option value="west_flemish">West-Vlaams</option><option value="east_flemish">Oost-Vlaams</option><option value="antwerp">Antwerps</option><option value="brabant">Brabants</option><option value="limburg">Limburgs</option>
-              </select>
-            </div>
+            <div><p className="step">01 · GESPREK</p><h2>Laatst gehoord</h2><p className="panel-intro">Taal en dialect worden automatisch herkend.</p></div>
           </div>
-          {!shiftMode && <><label htmlFor="demo">Testgesprek laden</label>
-          <select id="demo" value={selectedDemo} onChange={(event) => {
-            const demoId = event.target.value;
-            setSelectedDemo(demoId);
-            setTranscript(demoId ? DEMOS[demoId as keyof typeof DEMOS] : "");
-            setSpeechInsight(undefined);
-          }}>
-            <option value="">Kies testgesprek…</option>
-            <option value="core">Core Table 12 demo</option>
-            <option value="ambiguity">Ambiguous Leffe</option>
-            <option value="unknown">Unknown truffle pasta</option>
-            <option value="question">Question then order</option>
-            <option value="course">Course exception</option>
-            <option value="mixed">Mixed-language steak</option>
-            <option value="fuzzySpeech">Simuleer onduidelijke productspraak</option>
-          </select></>}
-          <textarea value={transcript} onChange={(event) => {
-            setTranscript(event.target.value);
-            setSelectedDemo("");
-            setSpeechInsight(undefined);
-          }} rows={10} aria-label="Conversation transcript" />
+          <div className={`speech-feed ${transcript ? "has-text" : ""}`} aria-live="polite">
+            <span className="speech-feed-mark" aria-hidden="true">“</span>
+            <p>{transcript || (recording ? "Ik luister…" : "Druk op Luister en spreek zoals je dat aan tafel doet.")}</p>
+          </div>
           {livePreviewGuidance && <div className="live-understanding" role="status"><strong>Live voorlopig</strong><p>{livePreviewGuidance}</p></div>}
           {speechInsight && <p className="speech-insight" role="status">{speechInsight}</p>}
           {assistantMessage && <div className="answer-card" role="status"><strong>Service Ears</strong><p>{assistantMessage}</p></div>}
-          <div className="capture-actions">
-            <button className="primary-button" disabled={busy || !menu || !transcript.trim()} onClick={() => void interpretTurns(
-              parseTranscript(transcript),
-              selectedDemo === "fuzzySpeech" ? "audio" : "text",
-              draft?.lines,
-            )}>
-              {busy ? "Bezig…" : draft?.lines.length ? "Toevoegen aan huidige bestelling" : "Bestelling verwerken"}
-            </button>
-            {draft && <button className="small-button" disabled={busy} onClick={() => {
+          {draft && <div className="capture-actions"><button className="small-button" disabled={busy} onClick={() => {
               operationCoordinator.current.cancel();
               recordingOperation.current = undefined;
               performanceTrace.current = undefined;
@@ -1530,20 +1415,19 @@ export function VoiceOrderConsole() {
               setLatestActions([]);
               setDraftHistory({ past: [], future: [] });
               localStorage.removeItem("service-ears:draft");
-            }}>Nieuwe bestelling</button>}
-          </div>
+            }}>Nieuwe bestelling</button></div>}
         </div>
 
         <div className="panel order-panel">
           <div className="panel-heading">
-            <div><p className="step">02 · CONTROLE</p><h2>{draft?.tableLabel ?? "Bestelconcept"}</h2><p className="panel-intro">Alleen gevalideerde POS-regels verschijnen hier.</p></div>
+            <div><p className="step">02 · BESTELLING</p><h2>{draft?.tableLabel ?? "Bestelconcept"}</h2><p className="panel-intro">Uitgesproken bestellingen verschijnen meteen; twijfel staat er duidelijk bij.</p></div>
             <span className={`order-status status-${draft?.status.toLowerCase() ?? "empty"}`}>
               {draft?.status === "NOT_SENT" ? "CONCEPT" : draft?.status === "SENT" ? "VERZONDEN" : draft?.status === "ERROR" ? "FOUT" : "LEEG"}
             </span>
           </div>
           <div className="review-tools">
-            <div>{uniqueLatestActions.slice(0, 3).map((action) => <span className={`intent-chip intent-${action.intent}`} key={`${action.intent}:${action.summary}`}>{INTENT_LABELS[action.intent]} · {Math.round(action.confidence * 100)}%</span>)}</div>
-            <div><button className="small-button" disabled={!draftHistory.past.length} onClick={() => { const next = undoDraft(draftHistory); setDraftHistory(next); if (next.present) setDraft(next.present); }}>Ongedaan</button><button className="small-button" disabled={!draftHistory.future.length} onClick={() => { const next = redoDraft(draftHistory); setDraftHistory(next); if (next.present) setDraft(next.present); }}>Opnieuw</button></div>
+            <span>Spreek verder om producten toe te voegen of te verwijderen.</span>
+            <button className="small-button" disabled={!draftHistory.past.length} onClick={() => { const next = undoDraft(draftHistory); setDraftHistory(next); if (next.present) setDraft(next.present); }}>Ongedaan maken</button>
           </div>
 
           {reviewActivity && (
@@ -1566,20 +1450,20 @@ export function VoiceOrderConsole() {
             </div>
           )}
 
-          {!draft && <div className="empty-state"><span>⌁</span><strong>Nog geen bestelconcept</strong><p>Gevalideerde producten verschijnen hier automatisch.</p></div>}
+          {!draft && <div className="empty-state"><span>⌁</span><strong>Nog geen bestelling</strong><p>Zodra je een product uitspreekt, verschijnt het hier automatisch.</p></div>}
           {provisionalDraft && (
             <div className="provisional-review provisional-draft" role="status" aria-live="polite">
               <span className="provisional-pulse" aria-hidden="true" />
               <div>
-                <strong>Voorlopig concept · snelle menucontrole</strong>
+                <strong>Bestelling gehoord · eindcontrole loopt</strong>
                 {provisionalDraft.lines.length > 0
                   ? <div className="provisional-lines">{provisionalDraft.lines.map((line) => <p key={line.lineId}>
                     <b>{line.quantity}× {line.canonicalName}</b>
                     {line.modifiers.length > 0 && <span> · {line.modifiers.map((modifier) => modifier.canonicalName).join(", ")}</span>}
                   </p>)}</div>
-                  : <p>Nog geen veilige bestellijn; context of vraag wordt gecontroleerd.</p>}
+                  : <p>Context of vraag wordt gecontroleerd.</p>}
                 {provisionalDraft.issues.some((issue) => issue.blocking) && <small>Bevestiging nodig voor {provisionalDraft.issues.filter((issue) => issue.blocking).length} onzeker punt.</small>}
-                <small>Nog niet bestelbaar; definitieve controle volgt uiterlijk binnen vijf seconden.</small>
+                <small>De definitieve controle volgt uiterlijk binnen vijf seconden.</small>
               </div>
             </div>
           )}
@@ -1615,7 +1499,7 @@ export function VoiceOrderConsole() {
 
               {draft.warnings.slice(0, 1).map((warning) => <div className="warning-card" key={warning.id}><strong>Veiligheidscontrole</strong><p>{warning.message}</p></div>)}
 
-              {draft.issues.length > 0 && <p className="step issue-step">03 · BEVESTIGEN</p>}
+              {draft.issues.length > 0 && <p className="step issue-step">ALLEEN NOG BEVESTIGEN</p>}
               {draft.issues.slice(0, 1).map((issue) => (
                 <div className="issue-card" key={issue.id}>
                   <strong>{issue.message}</strong>
@@ -1683,56 +1567,25 @@ export function VoiceOrderConsole() {
                 </div>
               ))}
               {draft.issues.length > 1 && <p className="queued-issues">Daarna volgen nog {draft.issues.length - 1} controlepunt{draft.issues.length === 2 ? "" : "en"}.</p>}
-
-              <div className="correction-box">
-                <label htmlFor="correction">Pas het concept aan</label>
-                <div className="correction-row">
-                  <input id="correction" value={correction} onChange={(event) => setCorrection(event.target.value)} placeholder="Bijv. verander die cola naar cola zero" />
-                  <button className="small-button" disabled={!correction.trim() || busy} onClick={() => void applyCorrection(correction)}>Toepassen</button>
-                  <button className={`voice-button ${recording === "correction" ? "recording" : ""}`} disabled={busy || recording === "conversation"} onClick={() => recording === "correction" ? void stopRecording() : void startRecording("correction")} aria-label="Correctie inspreken">{recording === "correction" ? "■" : "◉"}</button>
-                </div>
-              </div>
             </>
-          )}
-
-          {menu && draft && (
-            <div className="manual-fallback">
-              <label htmlFor="manual-product">Handmatig product uit het POS-menu</label>
-              <div className="resolution-row">
-                <select id="manual-product" value={manualProductId} onChange={(event) => setManualProductId(event.target.value)}>
-                  <option value="">Kies een geldig product…</option>
-                  {menu.products.filter((product) => product.active).map((product) => <option value={product.id} key={product.id}>{product.canonicalName}</option>)}
-                </select>
-                <button className="small-button" disabled={!manualProductId} onClick={() => {
-                  const product = menu.products.find((item) => item.id === manualProductId);
-                  if (product) commitDraft(addManualProduct(draft, product, menu));
-                  setManualProductId("");
-                }}>Toevoegen</button>
-              </div>
-            </div>
           )}
 
           {draft && (
             <div className="send-bar">
-              <div><span>{draft.lines.reduce((sum, line) => sum + line.quantity, 0)} producten</span><small>{draft.interpretationLatencyMs} ms interpretatie</small></div>
+              <div><span>{draft.lines.reduce((sum, line) => sum + line.quantity, 0)} producten</span><small>{hasBlockers ? "Controleer het gemarkeerde punt" : "Klaar voor de kassa"}</small></div>
               <button className="send-button" disabled={busy || hasBlockers || draft.status === "SENT"} onClick={() => void sendDraft()}>
                 {draft.status === "SENT" ? (draft.posSubmission?.adapter === "mock-pos" ? "Testorder aangemaakt" : "POS-concept verzonden") : draft.status === "ERROR" ? "Opnieuw proberen" : hasBlockers ? "Eerst controleren" : "Maak POS-concept"}
               </button>
             </div>
           )}
-          <div className="memory-panel">
-            <button className="memory-toggle" onClick={() => setHistoryOpen((value) => !value)}>{historyOpen ? "Verberg" : "Toon"} tafelgeschiedenis ({tableEvents.length})</button>
-            {historyOpen && <div className="event-list">{[...tableEvents].reverse().slice(0, 20).map((event) => <div key={event.id}><span className={`event-status ${event.status}`} /> <strong>{event.summary}</strong><small>{new Date(event.createdAt).toLocaleTimeString("nl-BE", { hour: "2-digit", minute: "2-digit" })} · {event.intent.replaceAll("_", " ")}</small></div>)}</div>}
-          </div>
         </div>
       </section>
 
-      {error && <div className="error-toast" role="alert"><strong>Action needed</strong><span>{error}</span><button onClick={() => setError(undefined)}>×</button></div>}
+      {error && <div className="error-toast" role="alert"><strong>Controle nodig</strong><span>{error}</span><button onClick={() => setError(undefined)}>×</button></div>}
 
       <footer>
-        <span>{menuResponse?.adapter ?? "POS laden…"}</span>
-        <strong>AI bereidt voor · Ober bevestigt · POS voert uit</strong>
-        <span>{speechMode === "browser" || (speechMode === "offline" && livePreviewEnabled) ? "Live preview via Edge · audio wordt niet bewaard" : "Ruwe gesprekken worden niet bewaard"}</span>
+        <strong>Service Ears · spreken, controleren, bestellen</strong>
+        <span>Audio wordt na verwerking verwijderd</span>
       </footer>
     </main>
   );
