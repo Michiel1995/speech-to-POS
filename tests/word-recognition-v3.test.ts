@@ -13,6 +13,7 @@ import {
   safeBrowserSpeechFallback,
   speechHypothesisMargin,
 } from "@/src/speech/recognition-ranker";
+import { browserSpeechFallbackDecision } from "@/src/speech/browser-speech-policy";
 
 describe("Service Ears 3 word recognition", () => {
   it.each([
@@ -59,6 +60,12 @@ describe("Service Ears 3 word recognition", () => {
     expect(completedBrowserSpeechText("", "een Duvel en twee Stella")).toBe("een Duvel en twee Stella");
     expect(completedBrowserSpeechText("een Duvel", "een Duvel en twee Stella")).toBe("een Duvel en twee Stella");
     expect(completedBrowserSpeechText("een Duvel", "een bier misschien")).toBe("een Duvel");
+  });
+
+  it("switches to the local microphone fallback when browser speech fails", () => {
+    expect(browserSpeechFallbackDecision("network")).toBe("fallback-local");
+    expect(browserSpeechFallbackDecision("not-allowed")).toBe("user-denied");
+    expect(browserSpeechFallbackDecision("no-speech")).toBe("fallback-local");
   });
 
   it("allows a menu-grounded Edge fallback but rejects unrelated conversation", () => {

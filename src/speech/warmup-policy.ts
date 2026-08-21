@@ -13,11 +13,9 @@ export function localSpeechRecordingReady(
   speechMode: SpeechMode,
   warmupState: LocalSpeechWarmupState,
 ): boolean {
-  // Warmup is an optimization, not a user-facing gate. A cold local model can
-  // still process the recording after stop, so listening should be available
-  // as soon as the speech route itself has been detected.
-  void warmupState;
-  return speechMode !== "detecting" && speechMode !== "unavailable";
+  if (speechMode === "detecting" || speechMode === "unavailable") return false;
+  if (warmupState !== "ready" && (speechMode === "offline" || speechMode === "browser")) return false;
+  return true;
 }
 
 export function warmupKeepaliveMeetsIdleBudget(

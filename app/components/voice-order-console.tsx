@@ -50,6 +50,7 @@ import {
   resolveWithProduct,
 } from "@/src/ui/draft-actions";
 import { completedBrowserSpeechText, rankSpeechHypotheses } from "@/src/speech/recognition-ranker";
+import { browserSpeechFallbackDecision } from "@/src/speech/browser-speech-policy";
 import {
   LOCAL_SPEECH_KEEPALIVE_MS,
   LOCAL_SPEECH_WARMUP_TIMEOUT_MS,
@@ -272,6 +273,7 @@ export function VoiceOrderConsole() {
   const browserRecognitionText = useRef("");
   const browserRecognitionPreviewText = useRef("");
   const browserRecognitionFailed = useRef(false);
+  const browserRecognitionFallbackStarted = useRef(false);
   const browserRecognitionStopTimer = useRef<number | undefined>(undefined);
   const livePreviewRecognition = useRef<BrowserSpeechRecognition | undefined>(undefined);
   const livePreviewText = useRef("");
@@ -913,6 +915,84 @@ export function VoiceOrderConsole() {
     await interpretTurns(turns, "audio", draft?.lines, operation);
   }, [applyCorrection, draft, finishOperation, interpretTurns, registerVoiceError]);
 
+  const startLocalRecording = useCallback(async (purpose: "conversation" | "correction", operation: VoiceOperationToken) => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const context = new AudioContext({ latencyHint: "interactive" });
+      const source = context.createMediaStreamSource(stream);
+      const processor = context.createScriptProcessor(4_096, 1, 1);
+      const sink = context.createGain();
+      sink.gain.value = 0;
+      recordingChunks.current = [];
+      recordingSampleRate.current = context.sampleRate;
+      recordingPurposeRef.current = purpose;
+      heardVoice.current = false;
+      consecutiveVoiceFrames.current = 0;
+      adaptiveNoiseFloor.current = ambientNoiseFloor.current;
+      recordingStartedAt.current = context.currentTime;
+      lastVoiceAt.current = context.currentTime;
+      processor.onaudioprocess = (event) => {
+        const samples = new Float32Array(event.inputBuffer.getChannelData(0));
+        recordingChunks.current.push(samples);
+        const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / Math.max(1, samples.length));
+        const floor = adaptiveNoiseFloor.current;
+        const speechThreshold = Math.max(0.0075, floor + Math.max(0.003, floor * 0.2));
+        if (rms >= speechThreshold) {
+          consecutiveVoiceFrames.current += 1;
+          if (consecutiveVoiceFrames.current >= 2) {
+            heardVoice.current = true;
+            lastVoiceAt.current = context.currentTime;
+          }
+        } else {
+          consecutiveVoiceFrames.current = 0;
+          if (!heardVoice.current || context.currentTime - lastVoiceAt.current >= 0.25) {
+            const boundedRms = Math.min(rms, floor * 1.3);
+            adaptiveNoiseFloor.current = Math.max(0.0015, floor * 0.985 + boundedRms * 0.015);
+          }
+        }
+        setAudioLevel(Math.min(1, rms * 7));
+      };
+      source.connect(processor);
+      processor.connect(sink);
+      sink.connect(context.destination);
+      recordingStream.current = stream;
+      audioContext.current = context;
+      audioSource.current = source;
+      audioProcessor.current = processor;
+      audioSink.current = sink;
+      setRecording(purpose);
+      startOfflineLivePreview(purpose, operation);
+      silenceTimer.current = window.setInterval(() => {
+        const elapsedSeconds = context.currentTime - recordingStartedAt.current;
+        const finishDelaySeconds = automaticSilenceDelaySeconds({
+          noiseFloorRms: adaptiveNoiseFloor.current,
+          spokenDurationSeconds: Math.max(0, lastVoiceAt.current - recordingStartedAt.current),
+          previewText: livePreviewText.current,
+        });
+        const silenceFinished = autoProcessOnSilence && heardVoice.current &&
+          context.currentTime - lastVoiceAt.current >= finishDelaySeconds;
+        const noSpeechTimeout = !heardVoice.current && elapsedSeconds >= 15;
+        const safetyLimit = elapsedSeconds >= MAX_AUTOMATIC_RECORDING_SECONDS;
+        if (recordingPurposeRef.current === purpose && (silenceFinished || noSpeechTimeout || safetyLimit)) {
+          if (silenceTimer.current) window.clearInterval(silenceTimer.current);
+          silenceTimer.current = undefined;
+          void stopRecording(purpose);
+        }
+      }, 250);
+    } catch (reason) {
+      registerVoiceError(reason, {
+        phase: "microphone",
+        operation,
+        code: "MICROPHONE_DENIED",
+        title: "Microfoon niet beschikbaar",
+        fallback: "Microfoontoegang is geweigerd.",
+      });
+      finishOperation(operation, "error", "ERROR");
+    }
+  }, [autoProcessOnSilence, finishOperation, registerVoiceError]);
+
   const startBrowserRecording = (purpose: "conversation" | "correction", operation: VoiceOperationToken) => {
     const BrowserRecognition = window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!BrowserRecognition) {
@@ -924,7 +1004,7 @@ export function VoiceOrderConsole() {
         operation,
         code: "BROWSER_SPEECH_UNAVAILABLE",
       });
-      finishOperation(operation, "error", "ERROR");
+      void startLocalRecording(purpose, operation);
       return;
     }
     const recognition = new BrowserRecognition();
@@ -937,6 +1017,7 @@ export function VoiceOrderConsole() {
     browserRecognitionText.current = "";
     browserRecognitionPreviewText.current = "";
     browserRecognitionFailed.current = false;
+    browserRecognitionFallbackStarted.current = false;
     recognition.onresult = (event) => {
       setAudioLevel(0.72);
       let interimText = "";
@@ -970,20 +1051,49 @@ export function VoiceOrderConsole() {
     };
     recognition.onerror = (event) => {
       browserRecognitionFailed.current = true;
-      const explanation = event.error === "not-allowed"
-        ? "Microfoontoegang is geweigerd. Sta de microfoon toe in Microsoft Edge."
-        : event.error === "network"
-          ? "De gratis Edge-spraakdienst is niet bereikbaar. Controleer je internetverbinding."
-          : event.error === "no-speech"
-            ? "Geen duidelijke spraak gehoord. Probeer opnieuw en spreek iets dichter bij de microfoon."
-          : `Spraakherkenning stopte: ${event.message || event.error}.`;
+      const errorCode = event.error ?? "failed";
+      const fallbackDecision = browserSpeechFallbackDecision(errorCode);
+      const explanation = errorCode === "not-allowed"
+        ? "Microfoontoegang is geweigerd. Sta de microfoon toe in Microsoft Edge en probeer opnieuw."
+        : errorCode === "network"
+          ? "De Edge-spraakdienst is niet bereikbaar; de lokale opname wordt automatisch als veilige backup gebruikt."
+          : errorCode === "no-speech"
+            ? "Er werd geen duidelijke spraak herkend. Spreek dichter bij de microfoon of kies de lokale opname."
+            : "De browser-spraakondersteuning stopte onverwacht; de lokale verwerking gaat verder als veilige backup.";
+      if (fallbackDecision === "user-denied") {
+        registerVoiceError(new VoicePipelineError({
+          code: "MICROPHONE_DENIED",
+          message: explanation,
+        }), {
+          phase: "browser-speech",
+          operation,
+          code: "MICROPHONE_DENIED",
+        });
+        return;
+      }
+      if (fallbackDecision === "fallback-local" && !browserRecognitionFallbackStarted.current) {
+        browserRecognitionFallbackStarted.current = true;
+        setSpeechInsight("Browser-spraak mislukte; de lokale opname verwerkt de conversatie veilig.");
+        registerVoiceError(new VoicePipelineError({
+          code: "BROWSER_SPEECH_FAILED",
+          message: explanation,
+        }), {
+          phase: "browser-speech",
+          operation,
+          code: "BROWSER_SPEECH_FAILED",
+        });
+        setRecording(undefined);
+        setAudioLevel(0);
+        void startLocalRecording(purpose, operation);
+        return;
+      }
       registerVoiceError(new VoicePipelineError({
-        code: event.error === "not-allowed" ? "MICROPHONE_DENIED" : "BROWSER_SPEECH_FAILED",
+        code: "BROWSER_SPEECH_FAILED",
         message: explanation,
       }), {
         phase: "browser-speech",
         operation,
-        code: event.error === "not-allowed" ? "MICROPHONE_DENIED" : "BROWSER_SPEECH_FAILED",
+        code: "BROWSER_SPEECH_FAILED",
       });
     };
     recognition.onend = () => {
@@ -997,7 +1107,11 @@ export function VoiceOrderConsole() {
       setRecording(undefined);
       setAudioLevel(0);
       if (browserRecognitionFailed.current && !recognizedText) {
-        finishOperation(operation, "error", "ERROR");
+        if (!browserRecognitionFallbackStarted.current) {
+          browserRecognitionFallbackStarted.current = true;
+          setSpeechInsight("Browser-spraak leverde geen bruikbare tekst; de lokale opname wordt automatisch gestart.");
+          void startLocalRecording(purpose, operation);
+        }
         return;
       }
       if (recognizedText) clearVisibleError();
@@ -1072,7 +1186,7 @@ export function VoiceOrderConsole() {
 
   const startService = useCallback(async () => {
     if (speechWarmupInFlight.current) return;
-    const needsLocalWarmup = localSpeechWarmupRequired(Boolean(window.serviceEarsDesktop), speechMode);
+    const needsLocalWarmup = localSpeechWarmupRequired(Boolean(window.serviceEarsDesktop), speechMode) || speechMode === "browser";
     speechWarmupInFlight.current = true;
     setShiftMode(true);
     setSpeechWarmupState(needsLocalWarmup ? "warming" : "ready");
@@ -1167,84 +1281,9 @@ export function VoiceOrderConsole() {
       detail: "Nog niets is definitief toegevoegd. Na stilte volgt automatisch uitschrijven en controleren.",
     });
     if (!window.serviceEarsDesktop && speechMode !== "offline") {
-      startBrowserRecording(purpose, operation);
-      return;
+      setSpeechInsight("Edge-spraak is optioneel; de lokale microfoon blijft de primaire opname voor een veilige bestelling.");
     }
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      });
-      const context = new AudioContext({ latencyHint: "interactive" });
-      const source = context.createMediaStreamSource(stream);
-      const processor = context.createScriptProcessor(4_096, 1, 1);
-      const sink = context.createGain();
-      sink.gain.value = 0;
-      recordingChunks.current = [];
-      recordingSampleRate.current = context.sampleRate;
-      recordingPurposeRef.current = purpose;
-      heardVoice.current = false;
-      consecutiveVoiceFrames.current = 0;
-      adaptiveNoiseFloor.current = ambientNoiseFloor.current;
-      recordingStartedAt.current = context.currentTime;
-      lastVoiceAt.current = context.currentTime;
-      processor.onaudioprocess = (event) => {
-        const samples = new Float32Array(event.inputBuffer.getChannelData(0));
-        recordingChunks.current.push(samples);
-        const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / Math.max(1, samples.length));
-        const floor = adaptiveNoiseFloor.current;
-        const speechThreshold = Math.max(0.0075, floor + Math.max(0.003, floor * 0.2));
-        if (rms >= speechThreshold) {
-          consecutiveVoiceFrames.current += 1;
-          if (consecutiveVoiceFrames.current >= 2) {
-            heardVoice.current = true;
-            lastVoiceAt.current = context.currentTime;
-          }
-        } else {
-          consecutiveVoiceFrames.current = 0;
-          if (!heardVoice.current || context.currentTime - lastVoiceAt.current >= 0.25) {
-            const boundedRms = Math.min(rms, floor * 1.3);
-            adaptiveNoiseFloor.current = Math.max(0.0015, floor * 0.985 + boundedRms * 0.015);
-          }
-        }
-        setAudioLevel(Math.min(1, rms * 7));
-      };
-      source.connect(processor);
-      processor.connect(sink);
-      sink.connect(context.destination);
-      recordingStream.current = stream;
-      audioContext.current = context;
-      audioSource.current = source;
-      audioProcessor.current = processor;
-      audioSink.current = sink;
-      setRecording(purpose);
-      startOfflineLivePreview(purpose, operation);
-      silenceTimer.current = window.setInterval(() => {
-        const elapsedSeconds = context.currentTime - recordingStartedAt.current;
-        const finishDelaySeconds = automaticSilenceDelaySeconds({
-          noiseFloorRms: adaptiveNoiseFloor.current,
-          spokenDurationSeconds: Math.max(0, lastVoiceAt.current - recordingStartedAt.current),
-          previewText: livePreviewText.current,
-        });
-        const silenceFinished = autoProcessOnSilence && heardVoice.current &&
-          context.currentTime - lastVoiceAt.current >= finishDelaySeconds;
-        const noSpeechTimeout = !heardVoice.current && elapsedSeconds >= 15;
-        const safetyLimit = elapsedSeconds >= MAX_AUTOMATIC_RECORDING_SECONDS;
-        if (recordingPurposeRef.current === purpose && (silenceFinished || noSpeechTimeout || safetyLimit)) {
-          if (silenceTimer.current) window.clearInterval(silenceTimer.current);
-          silenceTimer.current = undefined;
-          void stopRecording(purpose);
-        }
-      }, 250);
-    } catch (reason) {
-      registerVoiceError(reason, {
-        phase: "microphone",
-        operation,
-        code: "MICROPHONE_DENIED",
-        title: "Microfoon niet beschikbaar",
-        fallback: "Microfoontoegang is geweigerd.",
-      });
-      finishOperation(operation, "error", "ERROR");
-    }
+    void startLocalRecording(purpose, operation);
   };
 
   const stopRecording = async (forcedPurpose?: "conversation" | "correction") => {

@@ -4,6 +4,9 @@ coverage/
 dist/
 dist-desktop/
 desktop-runtime/
+portable/app/
+portable/offline-speech/bin/
+portable/offline-speech/models/
 .env
 .env.local
 .vercel/
