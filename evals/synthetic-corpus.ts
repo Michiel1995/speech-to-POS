@@ -23,18 +23,16 @@ export interface SyntheticCase extends EvaluationCase {
 const registers = [
   (text: string) => text,
   (text: string) => `${text.replace(/[.!?]+$/, "")} alsjeblieft.`,
-  (text: string) => `Voor mij ${text.toLowerCase()}`,
   (text: string) => `${text.replace(/[.!?]+$/, "")}, dank u.`,
   (text: string) => text.replace(/\./g, "").replace(/\s+/g, " ").trim(),
   (text: string) => text.toLowerCase(),
   (text: string) => text.toUpperCase(),
   (text: string) => `${text.replace(/[.!?]+$/, "")} hé.`,
-  (text: string) => `Graag ${text.toLowerCase()}`,
   (text: string) => `${text.replace(/[.!?]+$/, "")}, merci.`,
 ];
 
-const prefixes = ["", "Alstublieft, ", "Graag, ", "Voor ons, ", "Mag ik ", "We nemen ", "Ik zou graag ", "Doe maar ", "Voor mij ", "Kunt u noteren: "];
-const suffixes = ["", ".", " alsjeblieft", " graag", " dank u", " merci", " hé", " voor deze tafel", " als het kan", " aub"];
+const prefixes = ["", "Alstublieft, ", "Graag, ", "Mag ik vragen: "];
+const suffixes = ["", ".", " alsjeblieft", " graag", " dank u", " merci", " hé", " als het kan", " aub"];
 
 const languageByCategory: Record<string, SyntheticCase["language"]> = {
   French: "fr",
@@ -46,8 +44,8 @@ function hash(value: string): number {
   return Number.parseInt(createHash("sha256").update(value).digest("hex").slice(0, 8), 16);
 }
 
-function splitFor(id: string): SyntheticSplit {
-  const bucket = hash(id) % 20;
+function splitFor(sourceCaseId: string): SyntheticSplit {
+  const bucket = hash(sourceCaseId) % 20;
   return bucket < 14 ? "development" : bucket < 17 ? "validation" : "test";
 }
 
@@ -85,7 +83,7 @@ export function generateSyntheticCorpus(count = 5_000, seed = SYNTHETIC_CORPUS_S
   let variant = 0;
   while (generated.length < count) {
     const source = sources[(variant + seed) % sources.length];
-    const turns = varyTurns(source, variant);
+    const turns = varyTurns(source, Math.floor(variant / sources.length));
     const fingerprint = turns.map((turn) => `${turn.speaker}:${turn.text}`).join("|");
     if (!seen.has(fingerprint)) {
       const id = `synthetic-${String(generated.length + 1).padStart(5, "0")}`;
@@ -100,7 +98,7 @@ export function generateSyntheticCorpus(count = 5_000, seed = SYNTHETIC_CORPUS_S
         sourceCaseId: source.id,
         seed,
         generatorVersion: SYNTHETIC_CORPUS_VERSION,
-        split: splitFor(id),
+        split: splitFor(source.id),
       });
       seen.add(fingerprint);
     }

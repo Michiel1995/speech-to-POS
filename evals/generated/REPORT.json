@@ -3,9 +3,9 @@
   "seed": 20260824,
   "total": 5000,
   "splits": {
-    "development": 3559,
-    "validation": 710,
-    "test": 731
+    "development": 3330,
+    "validation": 781,
+    "test": 889
   },
   "categories": {
     "unconfirmed suggestion": 112,
