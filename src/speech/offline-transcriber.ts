@@ -303,7 +303,7 @@ async function transcribeHospitalityAudioOfflineUnlocked(
         throw new LocalWhisperServerError("Het transcriptiebudget was opgebruikt.", "inference-timeout");
       }
       const timeoutMs = remainingBudgetMs !== undefined
-        ? Math.max(1, Math.min(10_000, remainingBudgetMs))
+        ? Math.max(1, Math.min(20_000, remainingBudgetMs))
         : Math.max(30_000, Math.min(90_000, selection.targetLatencyMs * 3));
       const args = [
         "-m", selection.path,

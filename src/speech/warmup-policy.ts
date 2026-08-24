@@ -14,7 +14,7 @@ export function localSpeechRecordingReady(
   warmupState: LocalSpeechWarmupState,
 ): boolean {
   if (speechMode === "detecting" || speechMode === "unavailable") return false;
-  if (warmupState !== "ready" && (speechMode === "offline" || speechMode === "browser")) return false;
+  if ((warmupState === "idle" || warmupState === "warming") && (speechMode === "offline" || speechMode === "browser")) return false;
   return true;
 }
 

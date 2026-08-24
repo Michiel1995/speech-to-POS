@@ -101,6 +101,12 @@ describe("hard voice latency and factuality route", () => {
     expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 4_200 }));
   });
 
+  it("uses the local-only budget when the browser preview is not final", async () => {
+    const response = await transcribePost(audioRequest("Doe mij twee Duvel", 0.74, false));
+    expect(response.ok).toBe(true);
+    expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 20_000 }));
+  });
+
   it("finishes from the recorded local WAV without requiring Edge live text", async () => {
     offlineTranscriber.mockResolvedValue(localResult("Doe mij twee Duvel"));
     const response = await transcribePost(localOnlyAudioRequest());
@@ -108,7 +114,7 @@ describe("hard voice latency and factuality route", () => {
 
     expect(response.ok).toBe(true);
     expect(body).toMatchObject({ text: "Doe mij twee Duvel", engine: "whisper.cpp" });
-    expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 8_000 }));
+    expect(offlineTranscriber).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ maxPassMs: 20_000 }));
   });
 
   it("keeps a menu-grounded browser order when the local pass reaches its budget", async () => {

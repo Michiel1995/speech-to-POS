@@ -168,7 +168,7 @@ export async function POST(request: Request) {
         // Live Edge text may satisfy the strict five-second fallback. Without
         // it, keep listening to the already-recorded local WAV for a little
         // longer instead of turning a valid spoken order into an empty Review.
-        maxPassMs: browserCandidates.length > 0
+        maxPassMs: browserCandidates.length > 0 && browserPreviewFinal
           ? FINAL_TRANSCRIPTION_BUDGET_MS
           : LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
         maxQueueWaitMs: 650,
