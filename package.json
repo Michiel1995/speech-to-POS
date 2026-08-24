@@ -20,6 +20,7 @@
     "test:watch": "vitest",
     "repo:safety": "node scripts/repository-safety.mjs",
     "eval": "vitest run tests/evaluation-corpus.test.ts",
+    "eval:synthetic": "node scripts/generate-synthetic-corpus.mjs",
     "desktop:run": "electron .",
     "desktop:prepare": "node desktop/prepare-runtime.mjs",
     "package:test-outputs": "node desktop/package-test-outputs.mjs",
