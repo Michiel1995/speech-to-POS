@@ -21,7 +21,6 @@ import {
 } from "@/src/speech/offline-transcriber";
 import {
   FINAL_TRANSCRIPTION_BUDGET_MS,
-  LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
 } from "@/src/speech/latency-budget";
 
 export const runtime = "nodejs";
@@ -170,7 +169,7 @@ export async function POST(request: Request) {
         // longer instead of turning a valid spoken order into an empty Review.
         maxPassMs: browserCandidates.length > 0 && browserPreviewFinal
           ? FINAL_TRANSCRIPTION_BUDGET_MS
-          : LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS,
+          : undefined,
         maxQueueWaitMs: 650,
         signal: request.signal,
       });

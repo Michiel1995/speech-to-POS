@@ -99,7 +99,7 @@ describe("privacy-safe latency metrics", () => {
     expect(PROVISIONAL_REVIEW_BUDGET_MS).toBe(2_000);
     expect(FINAL_REVIEW_BUDGET_MS).toBe(5_000);
     expect(FINAL_TRANSCRIPTION_BUDGET_MS).toBeLessThan(FINAL_REVIEW_BUDGET_MS);
-    expect(LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS).toBe(8_000);
+    expect(LOCAL_ONLY_TRANSCRIPTION_BUDGET_MS).toBe(20_000);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 4_999 }).passed).toBe(true);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 2_000, finalP95Ms: 4_999 }).passed).toBe(false);
     expect(evaluateVoiceLatencyGate({ provisionalP95Ms: 1_999, finalP95Ms: 5_000 }).passed).toBe(false);
