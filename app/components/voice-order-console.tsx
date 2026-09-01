@@ -56,6 +56,7 @@ import {
   LOCAL_SPEECH_WARMUP_TIMEOUT_MS,
   localSpeechRecordingReady,
   localSpeechWarmupRequired,
+  preferredSpeechCaptureMode,
   type LocalSpeechWarmupState,
   type SpeechMode,
 } from "@/src/speech/warmup-policy";
@@ -69,6 +70,7 @@ import {
   type VoicePerformanceSample,
 } from "@/src/analytics/voice-performance";
 import {
+  classifyVoicePipelineError,
   VoicePipelineError,
   userFacingVoiceError,
   voicePipelineErrorDetails,
@@ -262,6 +264,14 @@ export function VoiceOrderConsole() {
   const [provisionalDraft, setProvisionalDraft] = useState<DraftOrder>();
   const [voicePhase, setVoicePhase] = useState<VoicePhase>("IDLE");
   const [, setPerformanceSamples] = useState<VoicePerformanceSample[]>([]);
+  // UX improvements: progress tracking
+  const [calibrationProgress, setCalibrationProgress] = useState(0); // 0-100%
+  const [warmupPhases, setWarmupPhases] = useState<{ speech: boolean; interpretation: boolean }>(
+    { speech: false, interpretation: false }
+  );
+  const [transcriptionConfidence, setTranscriptionConfidence] = useState<number | undefined>(undefined);
+  const [showDraftConfirmation, setShowDraftConfirmation] = useState(false);
+  const [operationCancelable, setOperationCancelable] = useState(false);
   const recordingStream = useRef<MediaStream | undefined>(undefined);
   const audioContext = useRef<AudioContext | undefined>(undefined);
   const audioSource = useRef<MediaStreamAudioSourceNode | undefined>(undefined);
@@ -379,7 +389,13 @@ export function VoiceOrderConsole() {
     },
   ) => {
     const inherited = voicePipelineErrorDetails(reason);
-    const code = context.code ?? inherited.code;
+    const inferredCode = classifyVoicePipelineError({
+      code: context.code ?? inherited.code,
+      status: context.status ?? inherited.status,
+      message: inherited.message,
+      endpoint: context.endpoint ?? inherited.endpoint,
+    });
+    const code = inferredCode;
     const status = context.status ?? inherited.status;
     const endpoint = context.endpoint ?? inherited.endpoint;
     const friendly = userFacingVoiceError({
@@ -876,6 +892,10 @@ export function VoiceOrderConsole() {
       ].filter(Boolean).join(" ");
       setSpeechInsight(speechDetails || undefined);
       setLivePreviewGuidance(undefined);
+      // Track transcription confidence for UX feedback
+      if (typeof result.confidence === "number") {
+        setTranscriptionConfidence(result.confidence);
+      }
       if (purpose === "correction") {
         await applyCorrection(result.text, operation);
       } else {
@@ -885,6 +905,20 @@ export function VoiceOrderConsole() {
       }
     } catch (reason) {
       if (isAbortError(reason) || !operationCoordinator.current.isActive(operation)) return;
+      // Fallback to browser speech if available when API fails
+      const shouldFallbackToBrowser = browserSpeechFallbackDecision({
+        error: reason,
+        browserRecognitionText: browserRecognitionFinalText.current || browserRecognitionText.current,
+        speechMode: speechModeRef.current,
+      });
+      if (shouldFallbackToBrowser && (browserRecognitionFinalText.current || browserRecognitionText.current)) {
+        const browserText = (browserRecognitionFinalText.current || browserRecognitionText.current).trim();
+        if (browserText) {
+          setSpeechInsight("API kon niet antwoorden; Browser-herkenning gebruikt als terugval.");
+          await finishBrowserRecognition(purpose, browserText, operation);
+          return;
+        }
+      }
       registerVoiceError(reason, { phase: "transcription", operation, endpoint: "/api/transcribe" });
       finishOperation(operation, "error", "ERROR");
     }
@@ -1190,8 +1224,11 @@ export function VoiceOrderConsole() {
     speechWarmupInFlight.current = true;
     setShiftMode(true);
     setSpeechWarmupState(needsLocalWarmup ? "warming" : "ready");
+    setCalibrationProgress(0);
+    setWarmupPhases({ speech: needsLocalWarmup, interpretation: false });
     const requestWarmup = async () => {
       try {
+        setWarmupPhases((prev) => ({ ...prev, speech: true }));
         const response = await fetch("/api/transcribe/warmup", {
           method: "POST",
           signal: AbortSignal.timeout(LOCAL_SPEECH_WARMUP_TIMEOUT_MS),
@@ -1204,6 +1241,7 @@ export function VoiceOrderConsole() {
       }
     };
     const warmup = needsLocalWarmup ? requestWarmup() : Promise.resolve(true);
+    setWarmupPhases((prev) => ({ ...prev, interpretation: true }));
     const interpretationWarmup = fetch("/api/interpret", { cache: "no-store" })
       .then(async (response) => response.ok && (await response.json() as { warmed?: boolean }).warmed === true)
       .catch(() => false);
@@ -1219,16 +1257,21 @@ export function VoiceOrderConsole() {
       let peakRms = 0;
       const calibrationLevels: number[] = [];
       const deadline = performance.now() + 700;
+      const startTime = performance.now();
       while (performance.now() < deadline) {
         analyser.getFloatTimeDomainData(samples);
         const rms = Math.sqrt(samples.reduce((sum, sample) => sum + sample * sample, 0) / samples.length);
         peakRms = Math.max(peakRms, rms);
         calibrationLevels.push(rms);
+        // Update calibration progress
+        const elapsed = performance.now() - startTime;
+        setCalibrationProgress(Math.min(100, Math.round((elapsed / 700) * 100)));
         await new Promise((resolve) => window.setTimeout(resolve, 70));
       }
       source.disconnect();
       stream.getTracks().forEach((track) => track.stop());
       await context.close();
+      setCalibrationProgress(100);
       const sortedLevels = calibrationLevels.sort((left, right) => left - right);
       const measuredNoiseFloor = sortedLevels[Math.floor(sortedLevels.length * 0.4)] ?? 0.004;
       ambientNoiseFloor.current = Math.max(0.0015, Math.min(0.12, measuredNoiseFloor));
@@ -1240,9 +1283,12 @@ export function VoiceOrderConsole() {
           : "Microfoon gereed · ruisprofiel gemeten");
     } catch {
       setMicrophoneStatus("Kalibratie overgeslagen · controleer microfoontoegang");
+      setCalibrationProgress(0);
     }
     const [warmed, interpretationReady] = await Promise.all([warmup, interpretationWarmup]);
     speechWarmupInFlight.current = false;
+    setCalibrationProgress(0);
+    setWarmupPhases({ speech: false, interpretation: false });
     if (!warmed) {
       setSpeechWarmupState("error");
       setMicrophoneStatus((current) => `${current} · lokale controle herstelt bij verwerking`);
@@ -1275,11 +1321,18 @@ export function VoiceOrderConsole() {
     clearVisibleError();
     setSpeechInsight(undefined);
     setLivePreviewGuidance(undefined);
+    setTranscriptionConfidence(undefined);
     setReviewActivity({
       phase: "listening",
       title: purpose === "correction" ? "Correctie beluisteren" : "Review luistert mee",
       detail: "Nog niets is definitief toegevoegd. Na stilte volgt automatisch uitschrijven en controleren.",
     });
+    const captureMode = preferredSpeechCaptureMode(speechMode);
+    if (captureMode === "browser") {
+      setSpeechInsight("Edge-spraak is actief; de lokale upload wordt alleen als backup gebruikt.");
+      startBrowserRecording(purpose, operation);
+      return;
+    }
     if (!window.serviceEarsDesktop && speechMode !== "offline") {
       setSpeechInsight("Edge-spraak is optioneel; de lokale microfoon blijft de primaire opname voor een veilige bestelling.");
     }
@@ -1334,11 +1387,28 @@ export function VoiceOrderConsole() {
         finishOperation(operation, "error", "ERROR");
         return;
       }
-      const { blob, preparation } = preparedRecordingToWav(
-        recordingChunks.current,
-        recordingSampleRate.current,
-        adaptiveNoiseFloor.current,
-      );
+      let blob: Blob;
+      let preparation: PreparedSpeechPcm;
+      try {
+        const result = preparedRecordingToWav(
+          recordingChunks.current,
+          recordingSampleRate.current,
+          adaptiveNoiseFloor.current,
+        );
+        blob = result.blob;
+        preparation = result.preparation;
+      } catch (reason) {
+        setRecording(undefined);
+        setAudioLevel(0);
+        registerVoiceError(reason, {
+          phase: "audio-finalization",
+          operation,
+          code: "WAV_CREATION_FAILED",
+          fallback: "Audio verwerking mislukt; probeer opnieuw.",
+        });
+        finishOperation(operation, "error", "ERROR");
+        return;
+      }
       const audioQuality = analyzeAudioQuality([preparation.samples]);
       if (!preparation.speechDetected) {
         setRecording(undefined);
@@ -1544,6 +1614,30 @@ export function VoiceOrderConsole() {
               <span>Microfoon</span>
               <div className="audio-meter" aria-label={`Microfoonniveau ${Math.round(audioLevel * 100)} procent`}><span style={{ width: `${Math.max(3, audioLevel * 100)}%` }} /></div>
             </div>
+            {calibrationProgress > 0 && calibrationProgress < 100 && (
+              <div className="calibration-progress" role="status" aria-live="polite">
+                <div className="progress-bar">
+                  <div className="progress-bar-fill" style={{ width: `${calibrationProgress}%` }} />
+                </div>
+                <span className="progress-percent">{calibrationProgress}%</span>
+              </div>
+            )}
+            {(warmupPhases.speech || warmupPhases.interpretation) && (
+              <div className="warmup-phases" role="status" aria-live="polite">
+                {warmupPhases.speech && (
+                  <div className={`warmup-phase ${speechWarmupState === "warming" ? "active" : ""}`}>
+                    <span className="warmup-phase-dot" />
+                    Model warmt op
+                  </div>
+                )}
+                {warmupPhases.interpretation && (
+                  <div className={`warmup-phase ${speechWarmupState === "warming" ? "active" : ""}`}>
+                    <span className="warmup-phase-dot" />
+                    Menu controle
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div className="record-copy">
             <p>{speechMode === "offline"
@@ -1566,32 +1660,14 @@ export function VoiceOrderConsole() {
           </div>
           {livePreviewGuidance && <div className="live-understanding" role="status"><strong>Live voorlopig</strong><p>{livePreviewGuidance}</p></div>}
           {speechInsight && <p className="speech-insight" role="status">{speechInsight}</p>}
+          {transcriptionConfidence !== undefined && transcriptionConfidence < 0.65 && !recording && (
+            <div className="confidence-warning" role="alert">
+              <span className="confidence-badge" />
+              Lage zekerheidsscore · controleer de transcriptie
+            </div>
+          )}
           {assistantMessage && <div className="answer-card" role="status"><strong>Service Ears</strong><p>{assistantMessage}</p></div>}
-          {draft && <div className="capture-actions"><button className="small-button" disabled={busy} onClick={() => {
-              operationCoordinator.current.cancel();
-              recordingOperation.current = undefined;
-              performanceTrace.current = undefined;
-              setVoicePhase("IDLE");
-              setProvisionalProducts([]);
-              setProvisionalDraft(undefined);
-              if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
-              provisionalReviewController.current?.abort();
-              draftRef.current = undefined;
-              setDraft(undefined);
-              setAssistantMessage(undefined);
-              setContextProductIds([]);
-              setTranscript("");
-              setSelectedDemo("");
-              setSpeechInsight(undefined);
-              setReviewActivity(undefined);
-              clearDraftForTable(tableId);
-              storeContextForTable(tableId, []);
-              storeEventsForTable(tableId, []);
-              setTableEvents([]);
-              setLatestActions([]);
-              setDraftHistory({ past: [], future: [] });
-              localStorage.removeItem("service-ears:draft");
-            }}>Nieuwe bestelling</button></div>}
+          {draft && <div className="capture-actions"><button className="small-button" disabled={busy} onClick={() => setShowDraftConfirmation(true)}>Nieuwe bestelling</button></div>}
         </div>
 
         <div className="panel order-panel">
@@ -1603,7 +1679,22 @@ export function VoiceOrderConsole() {
           </div>
           <div className="review-tools">
             <span>Spreek verder om producten toe te voegen of te verwijderen.</span>
-            <button className="small-button" disabled={!draftHistory.past.length} onClick={() => { const next = undoDraft(draftHistory); setDraftHistory(next); if (next.present) setDraft(next.present); }}>Ongedaan maken</button>
+            <div>
+              <button className="small-button" disabled={!draftHistory.past.length} onClick={() => { const next = undoDraft(draftHistory); setDraftHistory(next); if (next.present) setDraft(next.present); }}>Ongedaan maken</button>
+              {(voicePhase === "TRANSCRIBING" || voicePhase === "INTERPRETING") && (
+                <button className="cancel-operation-button" onClick={() => {
+                  operationCoordinator.current.cancel();
+                  setVoicePhase("CANCELLED");
+                  setProvisionalProducts([]);
+                  setProvisionalDraft(undefined);
+                  if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+                  provisionalReviewController.current?.abort();
+                }} aria-label="Huidige verwerking annuleren">
+                  <span className="cancel-dot" />
+                  Annuleren
+                </button>
+              )}
+            </div>
           </div>
 
           {reviewActivity && (
@@ -1802,6 +1893,45 @@ export function VoiceOrderConsole() {
       </section>
 
       {error && <div className="error-toast" role="alert"><strong>Controle nodig</strong><span>{error}</span><button onClick={() => setError(undefined)}>×</button></div>}
+
+      {showDraftConfirmation && (
+        <div className="confirmation-overlay" role="alertdialog" aria-modal="true">
+          <div className="confirmation-dialog">
+            <strong>Huidige bestelling verwijderen?</strong>
+            <p>{draft?.lines.reduce((sum, line) => sum + line.quantity, 0) ?? 0} producten en alle niet-bevestigde wijzigingen gaan verloren.</p>
+            <div className="confirmation-actions">
+              <button className="small-button" onClick={() => setShowDraftConfirmation(false)}>Toch doorgaan</button>
+              <button className="small-button" style={{ color: "#d32f2f" }} onClick={() => {
+                setShowDraftConfirmation(false);
+                operationCoordinator.current.cancel();
+                recordingOperation.current = undefined;
+                performanceTrace.current = undefined;
+                setVoicePhase("IDLE");
+                setProvisionalProducts([]);
+                setProvisionalDraft(undefined);
+                if (provisionalReviewTimer.current) window.clearTimeout(provisionalReviewTimer.current);
+                provisionalReviewController.current?.abort();
+                draftRef.current = undefined;
+                setDraft(undefined);
+                setAssistantMessage(undefined);
+                setContextProductIds([]);
+                setTranscript("");
+                setSelectedDemo("");
+                setSpeechInsight(undefined);
+                setReviewActivity(undefined);
+                setTranscriptionConfidence(undefined);
+                clearDraftForTable(tableId);
+                storeContextForTable(tableId, []);
+                storeEventsForTable(tableId, []);
+                setTableEvents([]);
+                setLatestActions([]);
+                setDraftHistory({ past: [], future: [] });
+                localStorage.removeItem("service-ears:draft");
+              }}>Nieuwe bestelling starten</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer>
         <strong>Service Ears · spreken, controleren, bestellen</strong>

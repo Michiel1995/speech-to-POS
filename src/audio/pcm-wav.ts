@@ -89,6 +89,13 @@ export function downsamplePcm(
   if (!Number.isFinite(inputSampleRate) || inputSampleRate <= 0) {
     throw new Error("De microfoon gaf een ongeldige samplefrequentie terug.");
   }
+  if (chunks.length === 0) {
+    throw new Error("Er werd geen microfoongeluid opgenomen.");
+  }
+  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (totalLength === 0) {
+    throw new Error("Er werd geen microfoongeluid opgenomen.");
+  }
   if (inputSampleRate < outputSampleRate) {
     throw new Error("De microfoonkwaliteit is te laag voor lokale spraakherkenning.");
   }
@@ -166,6 +173,7 @@ export function preparePcmForSpeech(
   inputSampleRate: number,
   calibratedNoiseFloorRms?: number,
 ): PreparedSpeechPcm {
+  if (!chunks.length) throw new Error("Er werd geen microfoongeluid opgenomen.");
   const input = downsamplePcm(chunks, inputSampleRate);
   if (!input.length) throw new Error("Er werd geen microfoongeluid opgenomen.");
 
@@ -207,6 +215,7 @@ export function preparePcmForSpeech(
     lastSample = Math.min(filtered.length, (speechClusters.at(-1)!.end + 1) * frameSize + postRoll);
   }
   const trimmed = filtered.slice(firstSample, lastSample);
+  if (!trimmed.length) throw new Error("Audio bevat geen geldige spraak na verwerking.");
 
   let peak = 0;
   let rmsSquares = 0;

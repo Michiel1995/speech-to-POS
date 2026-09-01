@@ -14,6 +14,7 @@ import {
   speechHypothesisMargin,
 } from "@/src/speech/recognition-ranker";
 import { browserSpeechFallbackDecision } from "@/src/speech/browser-speech-policy";
+import { preferredSpeechCaptureMode } from "@/src/speech/warmup-policy";
 
 describe("Service Ears 3 word recognition", () => {
   it.each([
@@ -66,6 +67,14 @@ describe("Service Ears 3 word recognition", () => {
     expect(browserSpeechFallbackDecision("network")).toBe("fallback-local");
     expect(browserSpeechFallbackDecision("not-allowed")).toBe("user-denied");
     expect(browserSpeechFallbackDecision("no-speech")).toBe("fallback-local");
+    expect(browserSpeechFallbackDecision({ error: "HTTP 503: local transcribe failed" })).toBe("fallback-local");
+  });
+
+  it("prefers browser speech in browser mode and local capture everywhere else", () => {
+    expect(preferredSpeechCaptureMode("browser")).toBe("browser");
+    expect(preferredSpeechCaptureMode("offline")).toBe("local");
+    expect(preferredSpeechCaptureMode("unavailable")).toBe("local");
+    expect(preferredSpeechCaptureMode("detecting")).toBe("local");
   });
 
   it("allows a menu-grounded Edge fallback but rejects unrelated conversation", () => {

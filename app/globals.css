@@ -618,3 +618,255 @@ footer strong { color: var(--forest); font-family: var(--serif); font-size: 0.72
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* UX Improvements: Confirmation Dialog & Progress Indicators */
+.confirmation-overlay {
+  position: fixed;
+  z-index: 40;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(5, 28, 23, 0.65);
+  backdrop-filter: blur(10px);
+}
+
+.confirmation-dialog {
+  width: min(420px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  border-radius: 22px;
+  padding: 26px;
+  color: var(--ink);
+  background: var(--paper-strong);
+  box-shadow: 0 28px 90px rgba(4, 28, 22, 0.38);
+  text-align: center;
+}
+
+.confirmation-dialog strong {
+  display: block;
+  margin-bottom: 10px;
+  font-family: var(--serif);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.confirmation-dialog p {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.confirmation-actions {
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 10px;
+}
+
+.confirmation-actions button {
+  min-height: 44px;
+  border: 1px solid #9ca9a3;
+  border-radius: 11px;
+  padding: 0 16px;
+  color: var(--forest);
+  background: rgba(255,255,255,0.82);
+  font-weight: 750;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.confirmation-actions button:hover {
+  border-color: var(--forest);
+  background: white;
+  box-shadow: 0 7px 18px rgba(30,43,37,0.08);
+}
+
+.confirmation-actions button:nth-child(2) {
+  color: white;
+  border-color: #d32f2f;
+  background: linear-gradient(180deg, #c2185b, #a71e47);
+}
+
+.confirmation-actions button:nth-child(2):hover {
+  border-color: #a71e47;
+  background: linear-gradient(180deg, #d32f2f, #c2185b);
+  box-shadow: 0 7px 18px rgba(211, 47, 47, 0.15);
+}
+
+/* Calibration Progress Indicator */
+.calibration-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 0;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #dcc88e, #a9caba);
+  box-shadow: 0 0 10px rgba(220, 200, 142, 0.4);
+  transition: width 200ms linear;
+}
+
+.progress-percent {
+  min-width: 28px;
+  color: #dfc98e;
+  font-size: 0.7rem;
+  font-weight: 760;
+  text-align: right;
+}
+
+/* Warmup Phase Indicator */
+.warmup-phases {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 0.65rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.warmup-phase {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.warmup-phase.active {
+  color: #dfc98e;
+  border-color: #dfc98e;
+  background: rgba(223, 201, 142, 0.15);
+  animation: warmup-pulse 1.2s ease-in-out infinite;
+}
+
+.warmup-phase-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+@keyframes warmup-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Confidence Warning Badge */
+.confidence-warning {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  border: 1px solid #e6c77d;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: linear-gradient(135deg, #fff8e4, #fef5e3);
+  color: #a47b14;
+  font-size: 0.72rem;
+  font-weight: 760;
+}
+
+.confidence-badge {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e6c77d;
+}
+
+/* Operation Cancel Button */
+.cancel-operation-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  border: 1px solid #c98478;
+  border-radius: 10px;
+  padding: 0 12px;
+  color: #8b4137;
+  background: #fff0ed;
+  font-size: 0.72rem;
+  font-weight: 760;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.cancel-operation-button:hover {
+  border-color: #b54231;
+  background: #ffe8e0;
+  box-shadow: 0 5px 14px rgba(211, 47, 47, 0.1);
+}
+
+.cancel-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@media (max-width: 560px) {
+  .confirmation-dialog {
+    width: min(360px, 100%);
+    padding: 20px;
+  }
+
+  .confirmation-dialog strong {
+    font-size: 1.1rem;
+  }
+
+  .confirmation-actions {
+    gap: 8px;
+  }
+
+  .send-bar {
+    grid-template-columns: 1fr;
+    margin: 22px -20px -20px;
+    padding: 17px 20px;
+    border-radius: 0 0 20px 20px;
+    gap: 12px;
+  }
+
+  .send-bar > div {
+    text-align: center;
+  }
+
+  .send-bar span {
+    font-size: 0.95rem;
+  }
+
+  .send-bar button {
+    width: 100%;
+    min-height: 48px;
+    font-size: 0.85rem;
+  }
+}
+
+@media (max-width: 380px) {
+  .send-bar span {
+    font-size: 0.85rem;
+  }
+
+  .send-bar small {
+    font-size: 0.7rem;
+  }
+
+  .send-button {
+    min-height: 44px;
+    font-size: 0.78rem;
+    padding: 10px 14px;
+  }
+}

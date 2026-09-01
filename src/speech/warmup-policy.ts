@@ -1,5 +1,6 @@
 export type SpeechMode = "detecting" | "offline" | "browser" | "unavailable";
 export type LocalSpeechWarmupState = "idle" | "warming" | "ready" | "error";
+export type SpeechCaptureMode = "browser" | "local";
 
 export const LOCAL_SPEECH_WARMUP_TIMEOUT_MS = 50_000;
 export const LOCAL_SPEECH_KEEPALIVE_MS = 60_000;
@@ -7,6 +8,11 @@ export const LOCAL_SPEECH_IDLE_UNLOAD_MS = 180_000;
 
 export function localSpeechWarmupRequired(desktop: boolean, speechMode: SpeechMode): boolean {
   return desktop || speechMode === "offline";
+}
+
+export function preferredSpeechCaptureMode(speechMode: SpeechMode): SpeechCaptureMode {
+  if (speechMode === "browser") return "browser";
+  return "local";
 }
 
 export function localSpeechRecordingReady(

@@ -62,6 +62,61 @@ const TECHNICAL_EXPLANATIONS: Record<string, TechnicalExplanation> = {
     explanation: "Het lokale Whisper-model leverde binnen de maximale verwerkingstijd geen volledige, bruikbare transcriptie. Het concept is daarom niet overschreven met een onvolledige gok.",
     suggestedChecks: ["Controleer modelopwarming en verwerkingstijd", "Vergelijk opnameduur met transcriptieduur", "Controleer ruisniveau en beschikbare live hypothesen"],
   },
+  LOCAL_TRANSCRIBE_API_FAILED: {
+    component: "Lokale transcriptie API",
+    explanation: "De lokale transcriptie-endpoint gaf een fout terug, vaak door een ontbrekende modelruntime of een afgebroken verwerking.",
+    suggestedChecks: ["Controleer /api/transcribe", "Controleer of de lokale runtime nog actief is", "Controleer 503/timeout-gevallen in de serverlog"],
+  },
+  LOCAL_TRANSCRIBE_TIMEOUT: {
+    component: "Lokale transcriptie timeout",
+    explanation: "De lokale transcriptie hield te lang de verwerking vast en mislukte nadien zonder veilig conceptresultaat.",
+    suggestedChecks: ["Controleer opname- en modeltijd", "Korte opnames eerst testen", "Controleer of een modelproces vastloopt"],
+  },
+  WAV_CREATION_FAILED: {
+    component: "Audiofinalisatie",
+    explanation: "De opname kon niet veilig naar WAV worden omgezet en werd daarom niet doorgestuurd voor herkenning.",
+    suggestedChecks: ["Controleer opnameduur en microfoonsignaal", "Controleer WAV-encoding in de browser", "Controleer of de opnamen daadwerkelijk stem bevatten"],
+  },
+  AUDIO_WAV_HEADER_INVALID: {
+    component: "Audioformatvalidatie",
+    explanation: "De WAV-header was afwezig of beschadigd, waardoor de opname niet als valide lokaal audiofragment kon worden verwerkt.",
+    suggestedChecks: ["Controleer audioformat in browser-devtools", "Controleer audio-chunks in het capture-proces", "Controleer op de juiste samplefrequentie"],
+  },
+  AUDIO_SAMPLE_RATE_INVALID: {
+    component: "Microfoonkwaliteit",
+    explanation: "De microfoonlevering had een ongeldige of te lage samplefrequentie voor veilige lokale verwerking.",
+    suggestedChecks: ["Controleer het gekozen invoerapparaat", "Controleer browser- en Windows-audiokwaliteit", "Probeer een andere microfoon of kortere opname"],
+  },
+  AUDIO_CHUNKS_EMPTY: {
+    component: "Microfoonstram",
+    explanation: "Er werden geen bruikbare audiodata-chunks verzameld voor verdere verwerking.",
+    suggestedChecks: ["Controleer of de stream daadwerkelijk is gestart", "Controleer het audioproces in de browser", "Controleer of de opname is afgelopen zonder stem"],
+  },
+  AUDIO_ONLY_NOISE: {
+    component: "Audiofilter",
+    explanation: "De voorbewerking classificeerde de opname als omgevingsgeluid zonder bruikbare spraak.",
+    suggestedChecks: ["Controleer ruisprofiel en microfoondrempel", "Controleer de afstand tot de spreker", "Test met kortere, duidelijkere zinnen"],
+  },
+  NO_SPEECH_DETECTED: {
+    component: "Spraakdetectie",
+    explanation: "Er was te weinig aaneengesloten stemsignaal om veilig een conversatie te beschouwen.",
+    suggestedChecks: ["Controleer spraakvolume", "Controleer ruis en stilte", "Test een kortere, helderdere uitspraak"],
+  },
+  MICROPHONE_STREAM_FAILED: {
+    component: "Microfoonstream",
+    explanation: "De microfoonstream werd niet betrouwbaar opgebouwd en kon daardoor geen audiodata leveren.",
+    suggestedChecks: ["Controleer microfoontoestemming", "Controleer apparaatkeuze", "Controleer browser- of OS-audiolocks"],
+  },
+  BROWSER_SPEECH_UNAVAILABLE: {
+    component: "Browserherkenning",
+    explanation: "De browser bood geen werkende SpeechRecognition-API aan voor live herkenning.",
+    suggestedChecks: ["Gebruik Edge of een compatibele browser", "Controleer browser-ondersteuning", "Val terug op de lokale route"],
+  },
+  BROWSER_SPEECH_FAILED: {
+    component: "Browserherkenning",
+    explanation: "De optionele browserherkenning stopte voor een fout of een leeg resultaat en ging niet veilig door.",
+    suggestedChecks: ["Controleer microfoontoegang", "Controleer netwerkstatus", "Controleer Edge spraakinstellingen"],
+  },
   OFFLINE_TRANSCRIPTION_FAILED: {
     component: "Lokale transcriptie",
     explanation: "De lokale transcriptiemotor kon de WAV-opname niet verwerken of het modelproces stopte onverwacht.",
