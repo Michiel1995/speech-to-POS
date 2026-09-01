@@ -1,0 +1,103 @@
+import { describe, expect, it } from "vitest";
+
+import { demoMenu } from "@/src/data/demo-menu";
+import { normalizeFlemish } from "@/src/language/flemish-dialect";
+import { finalDecisionClause, routeIntent, routeUtterance, type ConversationIntent } from "@/src/order-understanding/intent-router";
+import { planOrderAction } from "@/src/order-understanding/order-actions";
+
+interface IntentCase {
+  text: string;
+  expected: ConversationIntent;
+  hasOrder?: boolean;
+  hasContext?: boolean;
+}
+
+const baseCases: IntentCase[] = [
+  { text: "Ik neem een Duvel", expected: "order" }, { text: "Voor mij een steak", expected: "order" }, { text: "Doe mij een pintje", expected: "order" }, { text: "Twee Stella graag", expected: "order" },
+  { text: "Doe er nog een Stella bij", expected: "addition", hasOrder: true }, { text: "Nog een Duvel", expected: "addition", hasOrder: true }, { text: "Voor mij ook een cola", expected: "addition", hasOrder: true }, { text: "Voeg een koffie toe", expected: "addition", hasOrder: true },
+  { text: "Ik hoef de Duvel niet", expected: "removal", hasOrder: true }, { text: "Laat dat pintje maar zitten", expected: "removal", hasOrder: true }, { text: "Verwijder de koffie", expected: "removal", hasOrder: true }, { text: "Geen Stella meer", expected: "removal", hasOrder: true },
+  { text: "Vervang cola door cola zero", expected: "replacement", hasOrder: true }, { text: "Doe cola zero in plaats van cola", expected: "replacement", hasOrder: true }, { text: "Verander de Duvel naar Stella", expected: "replacement", hasOrder: true }, { text: "Replace Coke with Coke Zero", expected: "replacement", hasOrder: true },
+  { text: "Nee wacht, één Stella", expected: "correction", hasOrder: true }, { text: "Ik bedoel twee Duvel", expected: "correction", hasOrder: true }, { text: "Sorry, maak er drie van", expected: "correction", hasOrder: true }, { text: "Eigenlijk toch liever Stella", expected: "correction", hasOrder: true },
+  { text: "Welke bieren hebben jullie", expected: "menu_question" }, { text: "Wat hebben jullie van bier", expected: "menu_question" }, { text: "En welke voorgerechten", expected: "menu_question" }, { text: "Welke daarvan is alcoholvrij", expected: "menu_question", hasContext: true },
+  { text: "Zijn er nog Duvels", expected: "availability_question" }, { text: "Hebben jullie Leffe Blond", expected: "availability_question" }, { text: "Is er nog cola zero", expected: "availability_question" }, { text: "Wa hedde van bier", expected: "menu_question" },
+  { text: "Hoeveel kost die", expected: "price_question", hasContext: true }, { text: "Wat kost een Duvel", expected: "price_question" }, { text: "Welke prijs heeft de steak", expected: "price_question" }, { text: "How much is the Stella", expected: "price_question" },
+  { text: "Wat zit daarin", expected: "ingredient_question", hasContext: true }, { text: "Welke allergenen zitten in de steak", expected: "ingredient_question" }, { text: "Bevat de vol-au-vent gluten?", expected: "ingredient_question" }, { text: "What is in the shrimp croquettes?", expected: "ingredient_question" },
+  { text: "Welke raad je aan", expected: "recommendation_question" }, { text: "Wat kun je aanbevelen", expected: "recommendation_question" }, { text: "Wat is het populairste bier", expected: "recommendation_question" }, { text: "Recommend a dessert", expected: "recommendation_question" },
+  { text: "Ja", expected: "answer" }, { text: "Jazeker", expected: "answer" }, { text: "Ok graag", expected: "answer" }, { text: "Oui", expected: "answer" },
+  { text: "Nee", expected: "refusal" }, { text: "Neen liever niet", expected: "refusal" }, { text: "Non merci", expected: "refusal" }, { text: "Laat maar", expected: "refusal" },
+  { text: "Mijn nonkel drinkt altijd Duvel", expected: "non_order" }, { text: "Gisteren droomde ik van Stella", expected: "non_order" }, { text: "Dat was maar een mop over cola", expected: "non_order" }, { text: "Mijn zus heet Stella", expected: "non_order" },
+  { text: "Misschien later", expected: "unclear" }, { text: "Dat ding daar", expected: "unclear" }, { text: "We zien wel", expected: "unclear" }, { text: "Hmm misschien", expected: "unclear" },
+];
+
+const cases = baseCases.flatMap((entry, index) => [entry, { ...entry, text: `${entry.text}${index % 2 ? "." : "!"}` }]);
+
+describe("Service Ears 2.0 intent router corpus", () => {
+  it.each(cases)("routes '$text' as $expected", ({ text, expected, hasOrder, hasContext }) => {
+    expect(routeIntent(text, { menu: demoMenu, hasOrder, hasContext }).intent).toBe(expected);
+  });
+
+  it("splits a question and an order into distinct intentions", () => {
+    const routes = routeUtterance("Welke bieren hebben jullie? Doe mij daarna een Duvel.", { menu: demoMenu });
+    expect(routes.map((route) => route.intent)).toEqual(["menu_question", "order"]);
+  });
+
+  it("normalizes required Flemish contractions without changing product names", () => {
+    expect(normalizeFlemish("Awel, wa hedde? Khem goesting in ne Duvel.", "auto")).toContain("wat heb je");
+    expect(normalizeFlemish("Awel, wa hedde? Khem goesting in ne Duvel.", "auto")).toContain("duvel");
+  });
+
+  it("summarizes a course replacement with the new product, never Plaice", () => {
+    const route = routeIntent("In plaats van het voorgerecht een hamburger bestellen.", {
+      menu: demoMenu,
+      hasOrder: true,
+      existingProductIds: ["POS-2001"],
+    });
+    const action = planOrderAction(route, demoMenu);
+
+    expect(route.intent).toBe("replacement");
+    expect(route.productIds).toContain("POS-3006");
+    expect(route.productIds).not.toContain("POS-3005");
+    expect(action.summary).toBe("Vervangen: Hamburger");
+  });
+
+  it("distinguishes a product request for me from a real availability question", () => {
+    expect(routeIntent("Heb je voor mij een pintje en een Duvel?", { menu: demoMenu }).intent).toBe("order");
+    expect(routeIntent("Heb je nog Duvel beschikbaar?", { menu: demoMenu }).intent).toBe("availability_question");
+  });
+
+  it("routes only the decisive choice after natural spoken deliberation", () => {
+    const spoken = "Wat zou ik erbij drinken? Misschien cola of een pintje of doe maar een glaasje witte wijn anders.";
+
+    expect(finalDecisionClause(spoken)).toBe("doe maar een glaasje witte wijn");
+    const routes = routeUtterance(spoken, { menu: demoMenu, hasOrder: true });
+    expect(routes).toHaveLength(1);
+    expect(routes[0].intent).toBe("addition");
+    expect(routes[0].productIds).toEqual(expect.arrayContaining(["POS-1301", "POS-1302"]));
+    expect(routes[0].productIds).not.toEqual(expect.arrayContaining(["POS-1101", "POS-1002"]));
+  });
+
+  it("describes a course-level removal instead of generic conversation context", () => {
+    const route = routeIntent("Een voorgerecht is niet meer nodig.", { menu: demoMenu, hasOrder: true });
+
+    expect(route.intent).toBe("removal");
+    expect(planOrderAction(route, demoMenu).summary).toBe("Verwijderen: voorgerecht");
+  });
+
+  it("keeps undecided alternatives out of the order intent", () => {
+    const route = routeIntent("Misschien een cola of een Duvel, ik weet het nog niet.", { menu: demoMenu });
+
+    expect(route.intent).toBe("non_order");
+    expect(route.evidence).toContain("undecided-deliberation");
+  });
+
+  it("exposes a compound order and its self-correction as two clear actions", () => {
+    const routes = routeUtterance(
+      "Heb je voor mij een pinch, een Duvel en een cola of in plaats van het pintje doe maar een tweede dubbele.",
+      { menu: demoMenu, hasOrder: true },
+    );
+
+    expect(routes.map((route) => route.intent)).toEqual(["addition", "replacement"]);
+    expect(routes[0].productIds).toEqual(expect.arrayContaining(["POS-1002", "POS-1001", "POS-1101"]));
+    expect(routes[1].productIds).toEqual(expect.arrayContaining(["POS-1002", "POS-1001"]));
+  });
+});

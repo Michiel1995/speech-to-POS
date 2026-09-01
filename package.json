@@ -1,0 +1,94 @@
+{
+  "name": "speech-to-pos",
+  "version": "0.3.11",
+  "description": "Installable AI voice layer for safe hospitality POS draft preparation.",
+  "author": "Michiel1995",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint . --max-warnings=0",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:latency": "vitest --config vitest.latency.config.ts run",
+    "test:watch": "vitest",
+    "repo:safety": "node scripts/repository-safety.mjs",
+    "eval": "vitest run tests/evaluation-corpus.test.ts",
+    "eval:synthetic": "node scripts/generate-synthetic-corpus.mjs",
+    "eval:synthetic:verify": "node scripts/verify-synthetic-corpus.mjs",
+    "desktop:run": "electron .",
+    "desktop:prepare": "node desktop/prepare-runtime.mjs",
+    "package:test-outputs": "node desktop/package-test-outputs.mjs",
+    "desktop:dir": "pnpm build && pnpm desktop:prepare && electron-builder --win dir",
+    "desktop:build": "pnpm build && pnpm desktop:prepare && electron-builder --win msi"
+  },
+  "dependencies": {
+    "next": "16.3.0",
+    "openai": "7.4.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.2.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "electron": "43.3.0",
+    "electron-builder": "26.15.3",
+    "eslint": "9.39.5",
+    "eslint-config-next": "16.3.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "packageManager": "pnpm@11.16.0",
+  "build": {
+    "appId": "be.serviceears.desktop",
+    "productName": "Service Ears",
+    "asar": true,
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop-runtime",
+        "to": "app"
+      },
+      {
+        "from": "offline-speech",
+        "to": "offline-speech"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.svg",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "msi",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Service-Ears-Setup-${version}.${ext}"
+    },
+    "msi": {
+      "oneClick": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Service Ears",
+      "additionalLightArgs": [
+        "-sval"
+      ]
+    }
+  }
+}

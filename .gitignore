@@ -1,0 +1,36 @@
+.next/
+node_modules/
+coverage/
+dist/
+dist-desktop/
+desktop-runtime/
+portable/app/
+portable/offline-speech/bin/
+portable/offline-speech/models/
+.env
+.env.local
+.vercel/
+*.log
+*.tsbuildinfo
+.DS_Store
+
+# Local speech runtimes and model weights are packaged separately. They are
+# large, machine-specific binaries and must never be pushed to GitHub.
+offline-speech/bin/
+offline-speech/models/
+
+# Transient or privacy-sensitive voice fixtures and recordings.
+*.wav
+*.webm
+*.m4a
+*.mp3
+*.ogg
+
+# Generated Windows installers and executable runtimes.
+*.exe
+*.msi
+*.blockmap
+
+# Local acceptance output and operator diagnostics.
+test-results/
+service-ears-data/
